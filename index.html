@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arclane — Canvas Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="wordmark" id="brand">Arclane<span class="dot">.</span></div>
+
+  <div class="grp">
+    <button id="btnNew" title="Novo artboard em branco">+ Artboard</button>
+    <button id="btnImport" title="Importar arquivo .html como novo artboard">Importar</button>
+    <input type="file" id="fileInput" accept=".html,.htm,text/html" style="display:none">
+    <button id="btnExport" title="Baixar o artboard ativo como .html">Exportar</button>
+  </div>
+
+  <div class="grp">
+    <button id="btnOpenProject" title="Abrir um arquivo de projeto (.json)">Abrir projeto</button>
+    <input type="file" id="projectFileInput" accept=".json,application/json" style="display:none">
+    <button id="btnSave" title="Salvar projeto (todos os artboards) como .json">Salvar</button>
+    <button id="btnSaveAs" title="Salvar como novo arquivo .json">Salvar como</button>
+  </div>
+
+  <div class="grp">
+    <button id="modeEdit" class="active" title="Modo edição: selecionar e mover elementos">Editar</button>
+    <button id="modePreview" title="Modo leitura: visualizar layout">Visualizar</button>
+  </div>
+
+  <div class="grp">
+    <button id="btnUndo" title="Desfazer (Ctrl+Z)">↶</button>
+    <button id="btnRedo" title="Refazer (Ctrl+Shift+Z)">↷</button>
+    <button id="btnDup" title="Duplicar (Ctrl+D)">Duplicar</button>
+    <button id="btnDelete" title="Excluir (Del)">Excluir</button>
+  </div>
+
+  <div class="grp">
+    <button id="addElementBtn" title="Adicionar elemento (div, texto, tabela, nav…)">+ Elemento</button>
+    <input type="file" id="imageInput" accept="image/*" style="display:none">
+  </div>
+
+  <div class="grp">
+    <select id="artboardPreset" title="Tamanho do próximo artboard novo">
+      <option value="1440x900">Desktop 1440×900</option>
+      <option value="1280x800">Desktop 1280×800</option>
+      <option value="768x1024">Tablet 768×1024</option>
+      <option value="375x812">Mobile 375×812</option>
+    </select>
+  </div>
+
+  <div class="grp">
+    <button id="zoomOut">−</button>
+    <span id="zoomLabel">100%</span>
+    <button id="zoomIn">+</button>
+    <button id="zoomReset">Ajustar</button>
+  </div>
+
+  <div class="grp">
+    <button id="btnCode" title="Abrir/fechar painel de código">&lt;/&gt; Código</button>
+    <button id="btnTheme" title="Alternar tema do editor">◐</button>
+  </div>
+</div>
+
+<div id="main">
+  <div id="layersPanel">
+    <div class="panelTitle">Camadas</div>
+    <div id="layersTree"></div>
+  </div>
+
+  <div id="canvasArea">
+    <div id="canvasWrap">
+      <div id="artboardsRow"></div>
+      <div id="dropHint">Solte o arquivo .html aqui para criar um novo artboard</div>
+    </div>
+
+    <div id="codePanel">
+      <div id="codeToolbar">
+        <span class="panelTitle" style="margin:0;">Código do artboard ativo</span>
+        <span style="flex:1"></span>
+        <button id="btnCodeApply">Aplicar código →</button>
+        <button id="btnCodeCopy">Copiar</button>
+      </div>
+      <textarea id="codeArea" spellcheck="false"></textarea>
+    </div>
+  </div>
+
+  <div id="propsPanel">
+    <div class="panelTitle">Propriedades</div>
+    <div id="propsBody"><div id="propsEmpty">Nada selecionado.<br><br>Clique em um elemento, no título de um artboard, ou na lista de camadas.</div></div>
+  </div>
+</div>
+
+<div id="modalOverlay">
+  <div class="modalCard">
+    <div class="modalTitle" id="modalTitle"></div>
+    <div class="modalMsg" id="modalMsg"></div>
+    <input type="text" id="modalInput" style="display:none">
+    <div class="modalActions">
+      <button id="modalCancel">Cancelar</button>
+      <button id="modalConfirm">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="contextMenu"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

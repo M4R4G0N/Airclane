@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrar — Arclane</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0f1115; --surface:#161920; --surface-2:#1c202a; --border:#2b303c;
+    --text:#eef0f4; --text-dim:#9aa1b0; --accent:#35d0a4; --on-accent:#06231b; --danger:#ef5b5b;
+    --font-display:'Fraunces', Georgia, serif;
+    --font-body:'Manrope', -apple-system, "Segoe UI", sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0; height:100%;}
+  body{
+    font-family:var(--font-body); background:var(--ink); color:var(--text);
+    -webkit-font-smoothing:antialiased; font-size:15px; line-height:1.5;
+  }
+  a{color:inherit;}
+  h1,h2{font-family:var(--font-display); text-wrap:balance;}
+
+  .wrap{display:grid; grid-template-columns:1fr 1fr; min-height:100vh;}
+  @media (max-width:860px){ .wrap{grid-template-columns:1fr;} .panel-brand{display:none;} }
+
+  .panel-brand{
+    position:relative; background:var(--surface-2); border-right:1px solid var(--border);
+    padding:56px; display:flex; flex-direction:column; justify-content:space-between;
+    background-image:radial-gradient(var(--border) 1px, transparent 1px);
+    background-size:22px 22px; background-position:-8px -8px;
+  }
+  .wordmark{font-family:var(--font-display); font-weight:600; font-size:22px; letter-spacing:.01em;}
+  .wordmark .dot{color:var(--accent);}
+  .quote{
+    max-width:420px; background:var(--ink); border:1px solid var(--border); border-radius:16px;
+    padding:28px 30px;
+  }
+  .quote p{font-family:var(--font-display); font-size:22px; font-weight:500; margin:0 0 18px; line-height:1.4;}
+  .quote .attrib{display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-dim);}
+  .quote .avatar{width:30px; height:30px; border-radius:50%; background:var(--accent); flex-shrink:0;}
+  .brand-foot{font-size:12.5px; color:var(--text-dim);}
+
+  .panel-form{display:flex; align-items:center; justify-content:center; padding:40px 24px;}
+  .form-card{width:100%; max-width:380px;}
+  .form-card .wordmark{display:none; margin-bottom:36px;}
+  @media (max-width:860px){ .form-card .wordmark{display:block;} }
+
+  .eyebrow{font-size:12.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); margin:0 0 10px;}
+  h1{font-size:30px; font-weight:600; margin:0 0 8px;}
+  .sub{color:var(--text-dim); margin:0 0 32px; font-size:14.5px;}
+
+  .field{margin-bottom:18px;}
+  .field-row{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:6px;}
+  label{display:block; font-size:13px; font-weight:600; color:var(--text-dim); letter-spacing:.01em;}
+  input[type=email], input[type=password], input[type=text]{
+    width:100%; padding:12px 14px; border-radius:10px; border:1px solid var(--border);
+    background:var(--surface); color:var(--text); font:inherit; font-size:14.5px;
+  }
+  input::placeholder{color:#565c6b;}
+  input:focus{outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent);}
+
+  .link-accent{color:var(--accent); text-decoration:none; font-weight:600; font-size:13px;}
+  .link-accent:hover{text-decoration:underline;}
+
+  .btn-primary{
+    width:100%; padding:13px 18px; border-radius:10px; border:none; background:var(--accent);
+    color:var(--on-accent); font:inherit; font-size:15px; font-weight:700; cursor:pointer; margin-top:6px;
+  }
+  .btn-primary:hover{filter:brightness(1.06);}
+
+  .divider{display:flex; align-items:center; gap:12px; margin:26px 0; color:var(--text-dim); font-size:12.5px;}
+  .divider::before, .divider::after{content:''; flex:1; height:1px; background:var(--border);}
+
+  .switch{text-align:center; font-size:14px; color:var(--text-dim);}
+  .fineprint{margin-top:28px; font-size:12px; color:#6b7180; text-align:center; line-height:1.6;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div class="panel-brand">
+    <div class="wordmark">Arclane<span class="dot">.</span></div>
+    <div class="quote">
+      <p>“A gente cortou pela metade o tempo que passava organizando o trabalho da equipe. Arclane virou o lugar onde tudo realmente acontece.”</p>
+      <div class="attrib">
+        <div class="avatar"></div>
+        <div>Marina Duarte<br><span style="opacity:.7">Head of Ops, Fintra</span></div>
+      </div>
+    </div>
+    <div class="brand-foot">© 2026 Arclane. Todos os direitos reservados.</div>
+  </div>
+
+  <div class="panel-form">
+    <div class="form-card">
+      <div class="wordmark">Arclane<span class="dot">.</span></div>
+
+      <div class="eyebrow">Área de membros</div>
+      <h1>Bem-vindo de volta</h1>
+      <p class="sub">Entre pra continuar de onde parou.</p>
+
+      <form>
+        <div class="field">
+          <label for="email">E-mail</label>
+          <input type="email" id="email" name="email" placeholder="voce@empresa.com" autocomplete="email">
+        </div>
+
+        <div class="field">
+          <div class="field-row">
+            <label for="senha">Senha</label>
+            <a href="#" class="link-accent">Esqueceu a senha?</a>
+          </div>
+          <input type="password" id="senha" name="senha" placeholder="••••••••" autocomplete="current-password">
+        </div>
+
+        <button type="submit" class="btn-primary">Entrar</button>
+      </form>
+
+      <div class="divider">ou</div>
+
+      <p class="switch">Ainda não tem conta? <a href="register.html" class="link-accent">Criar conta</a></p>
+
+      <p class="fineprint">Ao entrar, você concorda com os Termos de Uso<br>e a Política de Privacidade da Arclane.</p>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
