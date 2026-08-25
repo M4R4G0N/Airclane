@@ -206,3 +206,44 @@ Um jeito de "programar" o artifact parecido com Power Apps, mas em JS de verdade
   2. **Exportação quebrada** — o runtime exportado buscava elementos por `[data-ae-name]`, mas o `cleanExportHTML` remove esse atributo logo em seguida. Agora a exportação atribui `data-ae-eid` aos elementos referenciados e o runtime exportado resolve por eid (mesmo truque das ações toggle/settext).
   3. **Fórmula guardada executando crua** — a tag que guarda fórmulas no documento era um `<script>` comum e executava sem o runtime ao re-parsear o HTML. Agora usa `type="text/x-ae-formula"` (inerte pro navegador, lida só na exportação).
   4. **Persistência nunca era acionada** — `storeFormulaInDoc` existia mas nada chamava; agora o botão de rodar guarda fórmulas comportamentais (com dedupe) antes do `pushHistory`.
+
+---
+
+## — Em andamento —
+
+### FASE 15 · UX do editor `em andamento`
+Rodada focada em como *usa* o editor, não em features novas de documento. Referências visuais: painel de propriedades do Figma (compacto, campos com label inline) + modelo "essencial / avançado" do Power Apps.
+
+**Lote 1 · Correções rápidas**
+- [ ] Bug: redimensionar artboard rápido demais "solta" a alça no meio do arrasto (o drag morre se o cursor sai do handle) — trocar pra pointer capture / listeners globais, só termina no `mouseup`
+- [ ] Delay/travamento visual ao arrastar pra redimensionar (elementos e artboard) — o overlay e o painel estão re-renderizando pesado a cada `mousemove`; atualizar ao vivo só o essencial e deixar o resto pro `mouseup`
+- [ ] Botão "CSS & variáveis" → renomear pra **CSS** e mover pra ao lado do `{ } JS`
+- [ ] `Ctrl+C` / `Ctrl+V` no artboard: sem elemento selecionado, copia/cola o artboard inteiro (hoje só existe o botão de duplicar)
+- [ ] Seção **Ação** das Propriedades sai da visão principal e vai pro "Avançado"
+
+**Lote 2 · Painel de Propriedades compacto (inspirado no Figma)**
+- [ ] Campos compactos com label inline (estilo `X 0 · Y 60 · W 250 · H 30` numa linha só)
+- [ ] Títulos de seção discretos em caixa alta, divisórias finas, menos altura vertical por campo
+- [ ] Visões refinadas: "Exibir" = só o mais usado (posição, tamanho, texto, cor, fundo); "Avançado" = tudo (inclui Ação, CSS livre, atributos)
+
+**Lote 3 · Fundo com gradiente (Fill estilo Figma)**
+- [ ] Preenchimento com Sólido / Gradiente linear / Gradiente radial — editor de paradas de cor + ângulo, gerando `linear-gradient()` / `radial-gradient()` de verdade no CSS
+- [ ] Substituir a paleta atual de "cores mais usadas" por **cores recentes** de verdade
+
+**Lote 4 · Páginas ↔ Camadas (estilo Figma)**
+- [ ] Painel lateral com abas no topo: **Páginas** (lista artboards: trocar, criar, renomear, duplicar, excluir) e **Camadas** (árvore atual do artboard ativo)
+
+**Lote 5 · Minimap**
+- [ ] Mini-mapa no canto do canvas com todos os artboards em miniatura + retângulo da região visível; clicar/arrastar navega
+
+**Lote 6 · Ícones e toolbar**
+- [ ] Trocar ícones por conjunto SVG consistente (traço fino, estilo Lucide/Feather)
+- [ ] Toolbar responsiva: em telas pequenas, itens menos usados caem num menu "⋯"
+
+**Lote 7 · Depois**
+- [ ] Barra de fórmulas — repensar UX (adiado por decisão)
+
+**Extras**
+- [ ] Zoom pra caber tudo (`Ctrl+1` / botão)
+- [ ] `F2` pra renomear o nome da camada quando o campo dela está focado
+- [ ] Guias de alinhamento (snap) — já existem, melhorar precisão/visual

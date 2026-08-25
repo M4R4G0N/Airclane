@@ -31,8 +31,9 @@ let toggleTargetCandidates = [];
 // is remembered same as before.
 let collapsedPropsSections = new Set(['Cantos', 'Padding', 'Margin', 'Borda', 'Regra CSS da classe']);
 // section headers always visible in the "Exibir" (simple) props view —
-// everything else only shows in "Avançado".
-const PROPS_SIMPLE_SECTIONS = ['Ação', 'Texto', 'Container', 'Lista', 'Mídia', 'Indicador', 'Layout', 'Cor'];
+// everything else only shows in "Avançado". "Ação" lives in Avançado only:
+// wiring behavior is a power-user move, not an everyday adjustment.
+const PROPS_SIMPLE_SECTIONS = ['Texto', 'Container', 'Lista', 'Mídia', 'Indicador', 'Layout', 'Cor'];
 
 const state = {
   zoom: 1,
@@ -47,7 +48,7 @@ const state = {
   propsSearchQuery: '',
   stylePainter: { active: false, props: null }, // "copiar estilo" tool: pick a source, then apply to targets
   codeTab: 'html', // which source the code panel's textarea is showing/applying: 'html' or 'js'
-  propsView: 'simple' // 'simple' shows only Tipo/Ação/Layout/Cor; 'full' shows every section
+  propsView: 'simple' // 'simple' shows only the everyday sections (Tipo/Layout/Cor…); 'full' shows every section
 };
 
 // state.selected plus everything in state.multiSelect, as an array.
@@ -1261,8 +1262,15 @@ function startArtboardResize(e, handle, ab){
   const startX = e.clientX, startY = e.clientY;
   const origX = ab.x, origY = ab.y, origW = ab.w, origH = ab.h;
 
-  function onMove(ev){
-    const dx = (ev.clientX - startX) / scale, dy = (ev.clientY - startY) / scale;
+  // Shrinking fast pulls the cursor over the iframe mid-drag — without the
+  // catcher covering it, the iframe swallows mousemove/mouseup and the drag
+  // "drops" (and feels laggy, because events only arrive when the cursor
+  // happens to be off the frame). Cover it and listen on both worlds, like
+  // every other drag in the editor does.
+  catchPointer(getComputedStyle(e.target).cursor);
+
+  function onMove(cx, cy){
+    const dx = (cx - startX) / scale, dy = (cy - startY) / scale;
     let x = origX, y = origY, w = origW, h = origH;
     if(handle.includes('e')) w = Math.max(120, origW + dx);
     if(handle.includes('s')) h = Math.max(80, origH + dy);
@@ -1274,12 +1282,10 @@ function startArtboardResize(e, handle, ab){
     renderOverlay();
   }
   function onUp(){
-    window.removeEventListener('mousemove', onMove);
-    window.removeEventListener('mouseup', onUp);
+    releasePointer();
     renderArtboardProps(ab);
   }
-  window.addEventListener('mousemove', onMove);
-  window.addEventListener('mouseup', onUp);
+  bindDragListeners(ab.dom.frame.contentDocument, ab.dom.frame, scale, onMove, onUp);
 }
 
 // ---------- resize ----------
@@ -4336,6 +4342,9 @@ canvasWrap.addEventListener('drop', function(e){
 // ---------- clipboard ----------
 
 let clipboardEl = null;
+// artboard-level clipboard: { name, w, h, html } — separate from the element
+// clipboard so Ctrl+C/V can copy a whole artboard when no element is selected
+let clipboardArtboard = null;
 function copySelected(){ if(state.selected) clipboardEl = state.selected.cloneNode(true); }
 function pasteClipboard(){
   const doc = getDoc();
@@ -4370,8 +4379,22 @@ function handleGlobalKeydown(e, activeDoc){
   if(e.ctrlKey && e.key.toLowerCase() === 'z' && !e.shiftKey){ e.preventDefault(); undo(); }
   else if(e.ctrlKey && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))){ e.preventDefault(); redo(); }
   else if(e.ctrlKey && e.key.toLowerCase() === 'd'){ e.preventDefault(); duplicateSelected(); }
-  else if(e.ctrlKey && e.key.toLowerCase() === 'c'){ if(state.selected){ e.preventDefault(); copySelected(); } }
-  else if(e.ctrlKey && e.key.toLowerCase() === 'v'){ if(clipboardEl){ e.preventDefault(); pasteClipboard(); } }
+  else if(e.ctrlKey && e.key.toLowerCase() === 'c'){
+    if(state.selected){ e.preventDefault(); copySelected(); }
+    else if(state.artboardMode){
+      const a = activeArtboard();
+      if(a){ e.preventDefault(); clipboardArtboard = { name: a.name, w: a.w, h: a.h, html: currentHTMLFor(a) }; }
+    }
+  }
+  else if(e.ctrlKey && e.key.toLowerCase() === 'v'){
+    if(clipboardEl){ e.preventDefault(); pasteClipboard(); }
+    else if(clipboardArtboard){
+      e.preventDefault();
+      const clone = createArtboard({ name: clipboardArtboard.name + ' cópia', w: clipboardArtboard.w, h: clipboardArtboard.h, html: clipboardArtboard.html });
+      setActiveArtboard(clone.id);
+      selectArtboardOnly(clone.id);
+    }
+  }
   else if(e.ctrlKey && e.key.toLowerCase() === 's'){ e.preventDefault(); document.getElementById('btnSave').click(); }
   else if(e.key === 'Delete' || e.key === 'Backspace'){ if(state.selected || state.artboardMode){ e.preventDefault(); deleteSelected(); } }
   else if(e.key === 'Escape'){
