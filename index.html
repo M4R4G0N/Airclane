@@ -50,6 +50,8 @@
 
   <div class="grp">
     <button id="btnCode" title="Abrir/fechar painel de código">&lt;/&gt; Código</button>
+    <button id="btnJs" title="Abrir o JavaScript do artboard ativo">{ } JS</button>
+    <button id="btnFormulaBar" title="Abrir/fechar barra de fórmulas (Power Apps style)">ƒx Fórmulas</button>
     <button id="btnToggleLayers" class="active" title="Mostrar/esconder painel de camadas">☰ Camadas</button>
     <button id="btnToggleProps" class="active" title="Mostrar/esconder painel de propriedades">▤ Propriedades</button>
     <button id="btnTheme" title="Alternar tema do editor">◐</button>
@@ -70,13 +72,25 @@
       <div id="dropHint">Solte o arquivo .html aqui para criar um novo artboard</div>
     </div>
 
+    <div id="formulaBarWrap">
+      <div id="formulaBar">
+        <span class="formulaLabel" title="Escreva JavaScript usando os nomes das camadas (ex: div_1.hide() ou div_1.text = 'hello')">ƒx</span>
+        <input type="text" id="formulaInput" placeholder="div_1.hide()  —  use os nomes das camadas como variáveis" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off">
+        <button id="btnFormulaRun" title="Aplicar fórmula no artboard ativo">▶</button>
+      </div>
+      <div id="formulaAutocomplete" class="formulaAutocomplete"></div>
+    </div>
+
     <div id="codePanel">
       <div id="codeToolbar">
         <span class="panelTitle" style="margin:0;">Código do artboard ativo</span>
+        <button id="codeTabHtml" class="active" title="Editar o HTML completo do artboard">HTML</button>
+        <button id="codeTabJs" title="Editar só o JavaScript do artboard">JavaScript</button>
         <span style="flex:1"></span>
         <button id="btnCodeApply">Aplicar código →</button>
         <button id="btnCodeCopy">Copiar</button>
       </div>
+      <div id="codeJsHint" style="display:none;">JS roda no modo Visualizar dentro do próprio editor (sem precisar exportar), e também no <code>.html</code> exportado — os cliques só chegam até ele fora do modo Editar, já que o overlay de edição intercepta antes.</div>
       <textarea id="codeArea" spellcheck="false"></textarea>
     </div>
 
@@ -90,7 +104,14 @@
 
   <div id="propsPanel">
     <div class="panelResizeHandle" id="propsResizeHandle"></div>
-    <div class="panelTitle">Propriedades</div>
+    <div class="panelTitleRow">
+      <div class="panelTitle" style="margin:0;">Propriedades</div>
+      <div id="propsViewToggle" class="propsViewToggle">
+        <button type="button" id="propsViewSimple" class="active" title="Só o essencial: tipo, ação, layout e cor">Exibir</button>
+        <button type="button" id="propsViewFull" title="Todos os campos">Avançado</button>
+      </div>
+    </div>
+    <input type="text" id="propsSearch" class="propsSearchInput" placeholder="🔍 Buscar propriedade…">
     <div id="propsBody"><div id="propsEmpty">Nada selecionado.<br><br>Clique em um elemento, no título de um artboard, ou na lista de camadas.</div></div>
   </div>
 </div>
@@ -110,15 +131,35 @@
 <div id="contextMenu"></div>
 
 <div id="colorPopover" class="colorPopover">
+  <div class="cpSV" id="cpSV"><div class="cpSVThumb" id="cpSVThumb"></div></div>
+  <div class="cpSlider cpHueSlider" id="cpHueSlider"><div class="cpSliderThumb" id="cpHueThumb"></div></div>
+  <div class="cpSlider cpAlphaSlider" id="cpAlphaSlider"><div class="cpAlphaBg"></div><div class="cpSliderThumb" id="cpAlphaThumb"></div></div>
   <div class="cpRow">
-    <input type="color" id="cpHue" title="Cor (matiz/RGB)">
-    <input type="text" id="cpText" placeholder="rgba(0,0,0,1) ou #hex" spellcheck="false">
+    <span class="cpPreview" id="cpPreview"></span>
+    <input type="text" id="cpText" placeholder="#rrggbb ou rgba(...)" spellcheck="false">
+    <button type="button" id="cpEyedrop" class="cpEyedrop" title="Conta-gotas — clique em qualquer lugar do canvas pra pegar a cor de lá">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m2 22 1-4 12.5-12.5a1.5 1.5 0 0 1 2 0l1 1a1.5 1.5 0 0 1 0 2L6 21l-4 1Z"/>
+        <path d="m14.5 6.5 3 3"/>
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L18 8l-3-3Z"/>
+      </svg>
+    </button>
   </div>
-  <div class="cpRow cpAlphaRow">
-    <label>Opacidade</label>
-    <input type="range" id="cpAlpha" min="0" max="100">
-    <span id="cpAlphaLabel">100%</span>
-  </div>
+  <div class="cpSwatches" id="cpSwatches"></div>
+</div>
+
+<div id="cpLoupe" class="cpLoupe">
+  <span class="cpLoupeSwatch" id="cpLoupeSwatch"></span>
+  <span class="cpLoupeHex" id="cpLoupeHex"></span>
+</div>
+
+<div id="textFormatBar" class="textFormatBar">
+  <button type="button" id="tfbBold" title="Negrito"><b>B</b></button>
+  <button type="button" id="tfbItalic" title="Itálico"><i>I</i></button>
+  <button type="button" id="tfbUnderline" title="Sublinhado"><u>U</u></button>
+  <span class="tfbSep"></span>
+  <button type="button" id="tfbSizeDown" title="Diminuir tamanho da letra">A−</button>
+  <button type="button" id="tfbSizeUp" title="Aumentar tamanho da letra">A+</button>
 </div>
 
 <div id="recentProjectsOverlay" class="modalOverlay">

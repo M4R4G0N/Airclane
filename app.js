@@ -17,6 +17,22 @@ const dropHint = document.getElementById('dropHint');
 
 let artboards = [];
 let artboardCounter = 0;
+let elNameCounter = 0;
+// populated by attributesSectionHTML(BUTTON) each render, consumed by
+// bindAttributesSection right after — same synchronous render→bind pass
+// used for every other props-panel field, just indexed instead of by id.
+let toggleTargetCandidates = [];
+// section headers the user has collapsed in the Propriedades panel —
+// keyed by the header's own text ("Layout", "Cor"…), persists across
+// re-renders/selections for the session, same idea as collapsedLayers.
+// starts with the less-frequently-touched sections already folded, so a
+// freshly selected element in "Avançado" doesn't dump everything expanded
+// at once — the user can still expand/collapse any of them, and that choice
+// is remembered same as before.
+let collapsedPropsSections = new Set(['Cantos', 'Padding', 'Margin', 'Borda', 'Regra CSS da classe']);
+// section headers always visible in the "Exibir" (simple) props view —
+// everything else only shows in "Avançado".
+const PROPS_SIMPLE_SECTIONS = ['Ação', 'Texto', 'Container', 'Lista', 'Mídia', 'Indicador', 'Layout', 'Cor'];
 
 const state = {
   zoom: 1,
@@ -28,7 +44,10 @@ const state = {
   rulePickedClass: null, // which of the selected element's classes the CSS-rule editor is showing
   multiSelect: new Set(), // secondary elements selected with Ctrl/Cmd+click, for align/distribute/bulk delete
   layersFilter: '',
-  stylePainter: { active: false, props: null } // "copiar estilo" tool: pick a source, then apply to targets
+  propsSearchQuery: '',
+  stylePainter: { active: false, props: null }, // "copiar estilo" tool: pick a source, then apply to targets
+  codeTab: 'html', // which source the code panel's textarea is showing/applying: 'html' or 'js'
+  propsView: 'simple' // 'simple' shows only Tipo/Ação/Layout/Cor; 'full' shows every section
 };
 
 // state.selected plus everything in state.multiSelect, as an array.
@@ -249,6 +268,60 @@ function goToArtboard(id){
   selectArtboardOnly(id);
 }
 
+// clicking a "Mostrar/ocultar elemento" button in Visualizar mode lands
+// here — flips the named element's display between 'none' and whatever it
+// was before, same simple toggle the exported .html's inline script does.
+function toggleElementByName(doc, name){
+  if(!doc) return;
+  const target = doc.querySelector('[data-ae-name="' + name.replace(/"/g, '\\"') + '"]');
+  if(!target) return;
+  target.style.display = target.style.display === 'none' ? '' : 'none';
+}
+
+function setElementTextByName(doc, name, text){
+  if(!doc) return;
+  const target = doc.querySelector('[data-ae-name="' + name.replace(/"/g, '\\"') + '"]');
+  if(!target) return;
+  target.textContent = text;
+}
+
+// clicking a "Chamar função JS" button in Visualizar mode calls the named
+// global function inside the artboard's own iframe — a plain top-level
+// `function nome(){}` written in the JS tab attaches to that window, same
+// as it would in any classic (non-module) script.
+function callNamedFunction(doc, el){
+  const name = el.getAttribute('data-ae-call');
+  if(!name || !doc || !doc.defaultView) return;
+  const fn = doc.defaultView[name];
+  if(typeof fn !== 'function'){
+    console.warn('[Arclane] função "' + name + '" não encontrada no JS desse artboard.');
+    return;
+  }
+  try { fn.call(el); } catch(e){ console.error('[Arclane] erro ao chamar "' + name + '":', e); }
+}
+
+// dispatches to whichever single action an element carries — used by the
+// click/hover handlers above and by the one-shot "ao carregar" firing.
+function runElementAction(doc, el){
+  const gotoId = el.getAttribute('data-ae-goto');
+  if(gotoId){ goToArtboard(gotoId); return; }
+  const toggleName = el.getAttribute('data-ae-toggle');
+  if(toggleName){ toggleElementByName(doc, toggleName); return; }
+  const setTextName = el.getAttribute('data-ae-settext');
+  if(setTextName){ setElementTextByName(doc, setTextName, el.getAttribute('data-ae-settext-value') || ''); return; }
+  if(el.hasAttribute('data-ae-call')) callNamedFunction(doc, el);
+}
+
+// "ao carregar o artboard" actions aren't triggered by user interaction, so
+// they aren't gated by edit/visualizar mode — they just run once whenever
+// the artboard's document (re)loads, same as any top-level script code would.
+function runLoadActions(doc){
+  if(!doc) return;
+  Array.from(doc.querySelectorAll('[data-ae-evt="load"]')).forEach(function(el){
+    runElementAction(doc, el);
+  });
+}
+
 function setArtboardSize(ab, w, h){
   ab.w = w; ab.h = h;
   ab.dom.frame.style.width = w + 'px';
@@ -257,6 +330,22 @@ function setArtboardSize(ab, w, h){
   stampArtboardSizeMeta(ab);
   if(state.activeId === ab.id) updateOverlayLive();
   repositionAddTile();
+}
+
+// grows the artboard's width/height so the content fits without a scrollbar
+// — scrollHeight/scrollWidth measure the full content extent regardless of
+// the current overflow setting (hidden/auto/scroll all still report it), so
+// this works no matter what "Rolagem" is set to. Only grows, never shrinks
+// the artboard smaller than it already is.
+function fitArtboardToContent(ab){
+  let doc;
+  try { doc = ab.dom.frame.contentDocument; } catch(e){ doc = null; }
+  if(!doc || !doc.documentElement) return;
+  const neededW = Math.max(ab.w, doc.documentElement.scrollWidth, doc.body ? doc.body.scrollWidth : 0);
+  const neededH = Math.max(ab.h, doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
+  if(neededW === ab.w && neededH === ab.h) return;
+  setArtboardSize(ab, neededW, neededH);
+  pushHistory(); syncCodeFromCanvas();
 }
 
 // stamps the artboard's size into a <meta> tag in its own document head, so
@@ -309,6 +398,9 @@ function loadDocumentInto(ab, html, pushHist){
   ab.dom.frame.setAttribute('srcdoc', html);
   ab.dom.frame.onload = function(){
     attachCanvasListeners(ab);
+    let loadedDoc; try { loadedDoc = ab.dom.frame.contentDocument; } catch(e){ loadedDoc = null; }
+    runLoadActions(loadedDoc);
+    redrawAllCharts(loadedDoc);
     stampArtboardSizeMeta(ab);
     if(pushHist !== false) pushHistoryFor(ab);
     if(state.activeId === ab.id){
@@ -331,6 +423,89 @@ function currentHTML(){
   return a ? currentHTMLFor(a) : DEFAULT_DOC;
 }
 
+// resolves a "Navegar para artboard" target (internal artboard id) to the
+// filename that artboard would export as — this only actually navigates
+// once every linked artboard has been exported into the same folder, so
+// it's a best-effort convenience, not a guarantee.
+function gotoExportFilename(id){
+  const target = artboards.find(function(a){ return a.id === id; });
+  return target ? target.name + '.html' : null;
+}
+
+// turns an <a href="#ae-goto:ID"> into a plain relative link — no JS needed,
+// the browser navigates on its own once the target file sits next to this one.
+function wireExportGotoLinks(clone){
+  clone.querySelectorAll('a[href^="#ae-goto:"]').forEach(function(a){
+    const id = a.getAttribute('href').slice('#ae-goto:'.length);
+    const filename = gotoExportFilename(id);
+    if(filename) a.setAttribute('href', filename); else a.removeAttribute('href');
+  });
+}
+
+// goto/toggle/call on anything other than <a> (button, div, span, image,
+// whatever the generic Ação section was used on) has no href to navigate
+// through, so it needs a real handler in the exported file — this is what
+// makes the action work outside the editor, not just in Visualizar mode.
+// One combined script covers all three action kinds plus every trigger
+// event (click/hover/hoverout/load), instead of three separate ones.
+//
+// Toggle's target is resolved by data-ae-name here, before cleanExportHTML
+// strips that attribute from the whole document — the target gets a
+// throwaway id (only targets get one, not every element) that the runtime
+// script can still find it by after the name is gone.
+function wireExportActions(doc, clone){
+  clone.querySelectorAll('[data-ae-goto]').forEach(function(el){
+    const filename = gotoExportFilename(el.getAttribute('data-ae-goto'));
+    el.removeAttribute('data-ae-goto');
+    if(filename) el.setAttribute('data-ae-goto-href', filename);
+    else el.removeAttribute('data-ae-evt');
+  });
+  let counter = 0;
+  // toggle and settext both reference another element by data-ae-name and
+  // need the same throwaway-id treatment, done here before that attribute
+  // is stripped from the whole document.
+  function resolveTarget(el, nameAttr, hrefAttr){
+    const name = el.getAttribute(nameAttr);
+    el.removeAttribute(nameAttr);
+    const target = clone.querySelector('[data-ae-name="' + name.replace(/"/g, '\\"') + '"]');
+    if(!target){ el.removeAttribute('data-ae-evt'); return; }
+    let eid = target.getAttribute('data-ae-eid');
+    if(!eid){ eid = 'ae-el-' + (++counter); target.setAttribute('data-ae-eid', eid); }
+    el.setAttribute(hrefAttr, eid);
+  }
+  clone.querySelectorAll('[data-ae-toggle]').forEach(function(el){ resolveTarget(el, 'data-ae-toggle', 'data-ae-toggle-target'); });
+  clone.querySelectorAll('[data-ae-settext]').forEach(function(el){ resolveTarget(el, 'data-ae-settext', 'data-ae-settext-target'); });
+  if(!clone.querySelector('[data-ae-goto-href],[data-ae-toggle-target],[data-ae-settext-target],[data-ae-call]')) return;
+  const script = doc.createElement('script');
+  script.textContent =
+    'function aeRunAction(el){' +
+      'var g=el.getAttribute("data-ae-goto-href");if(g){location.href=g;return;}' +
+      'var t=el.getAttribute("data-ae-toggle-target");if(t){var tg=document.querySelector(\'[data-ae-eid="\'+t+\'"]\');if(tg)tg.style.display=tg.style.display==="none"?"":"none";return;}' +
+      'var s=el.getAttribute("data-ae-settext-target");if(s){var sg=document.querySelector(\'[data-ae-eid="\'+s+\'"]\');if(sg)sg.textContent=el.getAttribute("data-ae-settext-value")||"";return;}' +
+      'var c=el.getAttribute("data-ae-call");if(c){var fn=window[c];if(typeof fn==="function")fn.call(el);}' +
+    '}' +
+    'document.querySelectorAll("[data-ae-goto-href],[data-ae-toggle-target],[data-ae-settext-target],[data-ae-call]").forEach(function(el){' +
+      'var evt=el.getAttribute("data-ae-evt")||"click";' +
+      'if(evt==="load"){aeRunAction(el);}' +
+      'else if(evt==="click"){' +
+        'if(el.tagName==="FORM"){el.addEventListener("submit",function(e){e.preventDefault();aeRunAction(el);});}' +
+        'else{el.addEventListener("click",function(){aeRunAction(el);});}' +
+      '}' +
+      'else if(evt==="hover"){el.addEventListener("mouseenter",function(){aeRunAction(el);});}' +
+      'else if(evt==="hoverout"){el.addEventListener("mouseleave",function(){aeRunAction(el);});}' +
+    '});';
+  clone.querySelector('body').appendChild(script);
+}
+
+// canvas pixels don't survive outerHTML, so the exported file needs its
+// own copy of the drawing function, run once the file opens.
+function wireExportCharts(doc, clone){
+  if(!clone.querySelector('canvas[data-ae-chart]')) return;
+  const script = doc.createElement('script');
+  script.textContent = AE_DRAW_CHART_SRC + 'document.querySelectorAll("canvas[data-ae-chart]").forEach(aeDrawChart);';
+  clone.querySelector('body').appendChild(script);
+}
+
 // editor-only bookkeeping (custom layer names) stripped from the file the
 // user actually downloads, so the exported artifact stays clean HTML.
 function cleanExportHTML(ab){
@@ -338,10 +513,18 @@ function cleanExportHTML(ab){
   try { doc = ab.dom.frame.contentDocument; } catch(e){ doc = null; }
   if(!doc) return DEFAULT_DOC;
   const clone = doc.documentElement.cloneNode(true);
+  wireExportGotoLinks(clone);
+  wireExportActions(doc, clone);
+  wireExportCharts(doc, clone);
+  wireExportFormulas(doc, clone);
   clone.querySelectorAll('[data-ae-name]').forEach(function(n){ n.removeAttribute('data-ae-name'); });
   clone.querySelectorAll('[data-ae-locked]').forEach(function(n){ n.removeAttribute('data-ae-locked'); });
   clone.querySelectorAll('[data-ae-group]').forEach(function(n){ n.removeAttribute('data-ae-group'); });
-  clone.querySelectorAll('[data-ae-goto]').forEach(function(n){ n.removeAttribute('data-ae-goto'); });
+  const userScript = clone.querySelector('script[data-ae-user-js]');
+  if(userScript){
+    if(userScript.textContent.trim()) userScript.removeAttribute('data-ae-user-js');
+    else userScript.remove();
+  }
   // internal bookkeeping only (round-trips artboard size through the
   // editor's own re-import) — not something someone opening the shipped
   // file should see in their <head>.
@@ -394,10 +577,73 @@ function updateUndoRedoButtons(){
 // ---------- code panel sync ----------
 
 let codeDebounce;
-function syncCodeFromCanvas(){ codeArea.value = currentHTML(); }
+
+// the JS tab edits one dedicated <script> tag, not the artboard's markup —
+// data-ae-user-js marks it so re-opening the tab finds the same one instead
+// of picking up some unrelated <script> a template/import brought along.
+function getUserScriptTag(doc, create){
+  if(!doc || !doc.body) return null;
+  let script = doc.querySelector('script[data-ae-user-js]');
+  if(script) return script;
+  // an imported/hand-written HTML may already carry a plain <script> with
+  // real code in it — adopt the first inline one (skip anything with a
+  // src, there's no textContent to show for that) instead of creating a
+  // second, disconnected script the JS tab would never display.
+  script = Array.from(doc.querySelectorAll('script')).find(function(s){ return !s.src; });
+  if(script){ script.setAttribute('data-ae-user-js', '1'); return script; }
+  if(create){
+    script = doc.createElement('script');
+    script.setAttribute('data-ae-user-js', '1');
+    doc.body.appendChild(script);
+  }
+  return script || null;
+}
+
+// feeds the "Chamar função JS" datalist — read-only scan, unlike
+// getUserScriptTag it never adopts/mutates anything, so it's safe to call
+// on every props-panel render.
+function detectFunctionNames(doc){
+  if(!doc) return [];
+  const names = [];
+  const re = /function\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  Array.from(doc.querySelectorAll('script')).filter(function(s){ return !s.src; }).forEach(function(s){
+    re.lastIndex = 0;
+    let m;
+    while((m = re.exec(s.textContent))) names.push(m[1]);
+  });
+  return names;
+}
+
+function syncCodeFromCanvas(){
+  if(state.codeTab === 'js'){
+    const script = getUserScriptTag(getDoc(), false);
+    codeArea.value = script ? script.textContent : '';
+    return;
+  }
+  codeArea.value = currentHTML();
+}
+
 function applyCodeToCanvas(){
   const a = activeArtboard();
-  if(a) loadDocumentInto(a, codeArea.value, true);
+  if(!a) return;
+  if(state.codeTab === 'js'){
+    const doc = getDoc();
+    if(!doc) return;
+    getUserScriptTag(doc, true).textContent = codeArea.value;
+    // srcdoc reload (not just editing the live doc in place) is what
+    // actually re-executes the script — same as applying an HTML edit.
+    loadDocumentInto(a, currentHTMLFor(a), true);
+    return;
+  }
+  loadDocumentInto(a, codeArea.value, true);
+}
+
+function setCodeTab(tab){
+  state.codeTab = tab;
+  document.getElementById('codeTabHtml').classList.toggle('active', tab === 'html');
+  document.getElementById('codeTabJs').classList.toggle('active', tab === 'js');
+  document.getElementById('codeJsHint').style.display = tab === 'js' ? '' : 'none';
+  syncCodeFromCanvas();
 }
 
 // ---------- selection & overlay ----------
@@ -467,6 +713,7 @@ function renderOverlay(){
     const sr = elRectToStage(sec);
     const sbox = document.createElement('div');
     sbox.className = 'sel-box multi';
+    sbox._el = sec;
     sbox.style.left = sr.left + 'px'; sbox.style.top = sr.top + 'px';
     sbox.style.width = sr.width + 'px'; sbox.style.height = sr.height + 'px';
     overlay.appendChild(sbox);
@@ -527,8 +774,21 @@ function updateOverlayLive(){
   const overlay = getOverlay();
   if(!overlay) return;
   const r = elRectToStage(state.selected);
-  const box = overlay.querySelector('.sel-box');
+  // ".sel-box" alone also matches every ".sel-box.multi" box (same base
+  // class) — without :not(.multi) this grabs whichever one happens to be
+  // first in the DOM, which silently becomes a *different* element's box
+  // the moment there's a multi-selection, throwing off drag/resize/scroll.
+  const box = overlay.querySelector('.sel-box:not(.multi)');
   if(box){ box.style.left = r.left + 'px'; box.style.top = r.top + 'px'; box.style.width = r.width + 'px'; box.style.height = r.height + 'px'; }
+  // the other selected elements' outlines never moved on scroll/live
+  // updates before — each multi box remembers its source element (set in
+  // renderOverlay) so it can be repositioned the same way as the primary.
+  overlay.querySelectorAll('.sel-box.multi').forEach(function(sbox){
+    if(!sbox._el || !sbox._el.isConnected) return;
+    const sr = elRectToStage(sbox._el);
+    sbox.style.left = sr.left + 'px'; sbox.style.top = sr.top + 'px';
+    sbox.style.width = sr.width + 'px'; sbox.style.height = sr.height + 'px';
+  });
   overlay.querySelectorAll('.edge').forEach(function(ed){
     const h = ['n', 'e', 's', 'w'].find(function(x){ return ed.classList.contains(x); });
     positionEdge(ed, h, r);
@@ -1047,6 +1307,36 @@ function attachCanvasListeners(ab){
   try { doc = ab.dom.frame.contentDocument; } catch(e){ doc = null; }
   if(!doc) return;
 
+  // registered before the normal selection/drag handler below, on the same
+  // capture phase, so it runs first and can swallow the click entirely
+  // while the eyedropper is armed — normal editing resumes right after.
+  doc.addEventListener('mousedown', function(e){
+    if(!colorPickingActive) return;
+    e.preventDefault(); e.stopPropagation();
+    const picked = pickColorAt(doc, e.clientX, e.clientY);
+    const parts = parseColorParts(picked);
+    const hsv = rgbToHsv(parts.r, parts.g, parts.b);
+    cpHSV = { h: hsv.h, s: hsv.s, v: hsv.v, a: parts.a };
+    renderColorPopover(true);
+    stopColorPicking();
+  }, true);
+  // hovering previews the color live — in the popover itself (SV square,
+  // hue thumb, hex field) and in a little swatch+hex loupe next to the
+  // cursor — without touching the actual element until the click lands.
+  doc.addEventListener('mousemove', function(e){
+    if(!colorPickingActive) return;
+    const picked = pickColorAt(doc, e.clientX, e.clientY);
+    const parts = parseColorParts(picked);
+    const hsv = rgbToHsv(parts.r, parts.g, parts.b);
+    cpHSV = { h: hsv.h, s: hsv.s, v: hsv.v, a: parts.a };
+    renderColorPopover(false);
+    const pt = artboardPointToPage(ab, e.clientX, e.clientY);
+    showColorLoupe(pt.x, pt.y, picked);
+  }, true);
+  doc.addEventListener('mouseleave', function(){
+    if(colorPickingActive) hideColorLoupe();
+  }, true);
+
   doc.addEventListener('mousedown', function(e){
     setActiveArtboard(ab.id);
     if(!state.editMode) return;
@@ -1082,8 +1372,15 @@ function attachCanvasListeners(ab){
       const a = e.target.closest && e.target.closest('a');
       const m = a && (a.getAttribute('href') || '').match(/^#ae-goto:(.+)$/);
       if(m){ e.preventDefault(); goToArtboard(m[1]); return; }
-      const btn = e.target.closest && e.target.closest('button[data-ae-goto]');
-      if(btn){ e.preventDefault(); goToArtboard(btn.getAttribute('data-ae-goto')); return; }
+      // any element can carry an action now, not just <button> — FORM is
+      // excluded here because its data-ae-goto is submit-triggered (below),
+      // not click-triggered, even though a click inside the form bubbles
+      // up to it.
+      const actionEl = e.target.closest && e.target.closest('[data-ae-goto],[data-ae-toggle],[data-ae-settext],[data-ae-call]');
+      if(actionEl && actionEl.tagName !== 'FORM' && (actionEl.getAttribute('data-ae-evt') || 'click') === 'click'){
+        e.preventDefault();
+        runElementAction(doc, actionEl);
+      }
       return;
     }
     const a = e.target.closest && e.target.closest('a');
@@ -1101,6 +1398,22 @@ function attachCanvasListeners(ab){
     if(gotoId) goToArtboard(gotoId);
   }, true);
 
+  // mouseenter/mouseleave don't bubble, so delegation uses mouseover/mouseout
+  // plus a relatedTarget containment check to emulate enter/leave without
+  // re-firing on every child hovered inside the same target.
+  doc.addEventListener('mouseover', function(e){
+    if(state.editMode) return;
+    const el = e.target.closest && e.target.closest('[data-ae-evt="hover"]');
+    if(!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
+    runElementAction(doc, el);
+  }, true);
+  doc.addEventListener('mouseout', function(e){
+    if(state.editMode) return;
+    const el = e.target.closest && e.target.closest('[data-ae-evt="hoverout"]');
+    if(!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
+    runElementAction(doc, el);
+  }, true);
+
   // Ctrl+scroll/pinch-zoom over the rendered artboard fires inside this
   // iframe's own document — it never reaches canvasWrap's wheel listener
   // in the parent page, so without this the browser's native page zoom
@@ -1115,13 +1428,20 @@ function attachCanvasListeners(ab){
     e.preventDefault(); e.stopPropagation();
     target.setAttribute('contenteditable', 'true');
     target.focus();
+    activeEditDoc = doc; activeEditTarget = target; activeEditArtboard = ab;
     function onBlur(){
       target.removeAttribute('contenteditable');
       target.removeEventListener('blur', onBlur);
+      activeEditDoc = null; activeEditTarget = null; activeEditArtboard = null;
+      hideTextFormatBar();
       pushHistory(); syncCodeFromCanvas(); renderLayers();
     }
     target.addEventListener('blur', onBlur);
   }, true);
+  // a text selection made while editing inline (above) shows a small
+  // floating Bold/Italic/Underline/size toolbar next to it — this is what
+  // notices the selection changing so the toolbar can appear/move/hide.
+  doc.addEventListener('selectionchange', function(){ updateTextFormatBar(ab); });
 
   doc.addEventListener('contextmenu', function(e){
     if(!state.editMode) return;
@@ -1144,7 +1464,23 @@ function attachCanvasListeners(ab){
     }
   }, true);
 
+  // capture-phase on the iframe's own window catches a scroll fired on any
+  // descendant (capturing runs top-down regardless of whether the event
+  // itself bubbles, and 'scroll' doesn't) — this is the general case.
   doc.defaultView.addEventListener('scroll', updateOverlayLive, true);
+  // belt-and-suspenders: also bind directly to every element that actually
+  // scrolls internally (overflow auto/scroll with real overflow), so a
+  // quirk in how a specific container dispatches its scroll event can't
+  // silently drop the overlay out of sync with it.
+  try {
+    const cs = doc.defaultView.getComputedStyle;
+    Array.from(doc.querySelectorAll('*')).forEach(function(node){
+      const st = cs(node);
+      const scrollsY = (st.overflowY === 'auto' || st.overflowY === 'scroll') && node.scrollHeight > node.clientHeight;
+      const scrollsX = (st.overflowX === 'auto' || st.overflowX === 'scroll') && node.scrollWidth > node.clientWidth;
+      if(scrollsY || scrollsX) node.addEventListener('scroll', updateOverlayLive, { passive: true });
+    });
+  } catch(e){}
   doc.addEventListener('keydown', function(e){ handleGlobalKeydown(e, doc); });
 
   // Ctrl+V with an image on the OS clipboard (a screenshot, "copy image"
@@ -1195,6 +1531,18 @@ function shortLabel(el){
   let s = el.tagName.toLowerCase();
   if(el.id) s += '#' + el.id;
   else if(el.className && typeof el.className === 'string' && el.className.trim()) s += '.' + el.className.trim().split(/\s+/)[0];
+  return s;
+}
+
+// like shortLabel, but for the action-target pickers (toggle/settext):
+// those auto-assign a data-ae-name the moment an element is picked, and
+// shortLabel would then show only that generated name — losing the "it's
+// a div" context that made it recognizable in a list of several elements.
+function targetPickerLabel(el){
+  let s = el.tagName.toLowerCase();
+  if(el.id) s += '#' + el.id;
+  else if(el.className && typeof el.className === 'string' && el.className.trim()) s += '.' + el.className.trim().split(/\s+/)[0];
+  if(el.dataset && el.dataset.aeName) s += ' (' + el.dataset.aeName + ')';
   return s;
 }
 
@@ -1409,16 +1757,33 @@ function renderArtboardProps(ab){
   const presetOpts = ARTBOARD_PRESETS.map(function(p, i){
     return '<option value="' + i + '"' + (i === (presetIdx < 0 ? 0 : presetIdx) ? ' selected' : '') + '>' + p.label + '</option>';
   }).join('');
+  const doc = getDoc();
+  const bodyStyle = doc && doc.body ? doc.body.style : {};
+  const overflowVal = bodyStyle.overflow || 'visible';
+  const smoothingVal = bodyStyle.webkitFontSmoothing === 'antialiased' ? 'antialiased'
+    : (bodyStyle.textRendering === 'optimizeLegibility' ? 'legibility' : 'auto');
 
   propsBody.innerHTML =
     '<div class="propsSection">Artboard</div>' +
     '<div class="field"><label>Nome</label><input type="text" id="pAbName" value="' + ab.name.replace(/"/g,'&quot;') + '"></div>' +
     '<div class="field"><label>Tamanho da tela</label><select id="pAbPreset">' + presetOpts + '</select></div>' +
     '<div class="row2">' +
-      '<div class="field"><label>Largura</label><input type="number" id="pAbW" value="' + ab.w + '"></div>' +
-      '<div class="field"><label>Altura</label><input type="number" id="pAbH" value="' + ab.h + '"></div>' +
+      '<div class="field">' + iconFieldHTML('W', 'pAbW', ab.w, 'Largura') + '</div>' +
+      '<div class="field">' + iconFieldHTML('H', 'pAbH', ab.h, 'Altura') + '</div>' +
     '</div>' +
-    '<div class="field"><label>Fundo do artboard</label><input type="color" id="pAbBg" value="' + getArtboardBgHex(ab) + '"></div>' +
+    '<div class="field"><button type="button" id="pAbFit" style="width:100%;" title="Aumenta a largura e/ou altura do artboard até o conteúdo inteiro caber, sem precisar rolar">⤢ Expandir até caber o conteúdo (sem scroll)</button></div>' +
+    '<div class="field"><label>Fundo do artboard</label>' + colorSwatchHTML('pAbBg', getArtboardBgHex(ab)) + '</div>' +
+    '<div class="propsSection">Comportamento (&lt;body&gt;)</div>' +
+    '<div class="row2">' +
+      '<div class="field"><label>Rolagem (overflow)</label><select id="pAbOverflow">' +
+        ['visible', 'hidden', 'auto', 'scroll'].map(function(v){ return '<option value="' + v + '"' + (v === overflowVal ? ' selected' : '') + '>' + v + '</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="field"><label>Suavização de texto</label><select id="pAbSmoothing">' +
+        '<option value="auto"' + (smoothingVal === 'auto' ? ' selected' : '') + '>Padrão</option>' +
+        '<option value="antialiased"' + (smoothingVal === 'antialiased' ? ' selected' : '') + '>Antialiased</option>' +
+        '<option value="legibility"' + (smoothingVal === 'legibility' ? ' selected' : '') + '>Legibilidade otimizada</option>' +
+      '</select></div>' +
+    '</div>' +
     '<hr>' +
     '<div class="field"><button id="pAbDup" style="width:100%">Duplicar artboard</button></div>' +
     '<div class="field"><button id="pAbDel" class="dangerBtn">Excluir artboard</button></div>';
@@ -1433,11 +1798,26 @@ function renderArtboardProps(ab){
   });
   document.getElementById('pAbW').addEventListener('change', function(){ setArtboardSize(ab, parseInt(this.value) || ab.w, ab.h); renderArtboardProps(ab); });
   document.getElementById('pAbH').addEventListener('change', function(){ setArtboardSize(ab, ab.w, parseInt(this.value) || ab.h); renderArtboardProps(ab); });
-  document.getElementById('pAbBg').addEventListener('input', function(){
+  document.getElementById('pAbFit').addEventListener('click', function(){ fitArtboardToContent(ab); renderArtboardProps(ab); });
+  bindColorSwatchSimple('pAbBg', function(rgba){
     const doc = getDoc();
-    if(doc && doc.body) doc.body.style.backgroundColor = this.value;
+    if(doc && doc.body) doc.body.style.backgroundColor = rgba;
     clearTimeout(codeDebounce);
     codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 300);
+  });
+  document.getElementById('pAbOverflow').addEventListener('change', function(){
+    const doc = getDoc();
+    if(doc && doc.body) doc.body.style.overflow = this.value === 'visible' ? '' : this.value;
+    pushHistory(); syncCodeFromCanvas();
+  });
+  document.getElementById('pAbSmoothing').addEventListener('change', function(){
+    const doc = getDoc();
+    if(doc && doc.body){
+      if(this.value === 'antialiased'){ doc.body.style.webkitFontSmoothing = 'antialiased'; doc.body.style.textRendering = ''; }
+      else if(this.value === 'legibility'){ doc.body.style.webkitFontSmoothing = ''; doc.body.style.textRendering = 'optimizeLegibility'; }
+      else { doc.body.style.webkitFontSmoothing = ''; doc.body.style.textRendering = ''; }
+    }
+    pushHistory(); syncCodeFromCanvas();
   });
   document.getElementById('pAbDup').addEventListener('click', function(){ duplicateArtboard(ab); });
   document.getElementById('pAbDel').addEventListener('click', async function(){
@@ -1451,19 +1831,170 @@ function getArtboardBgHex(ab){
   return rgbToHex(doc.defaultView.getComputedStyle(doc.body).backgroundColor);
 }
 
+// ---------- ações sem código (navegar / mostrar-ocultar / chamar função) ----------
+// shared by every element type that can carry an action — button, link,
+// image, or any generic container (div, span, section…) that falls through
+// attributesSectionHTML's tag-specific cases below. One element can only
+// hold one action (goto/toggle/call are mutually exclusive), but it fires
+// on whichever event is picked, not just click.
+const AE_EVENTS = [
+  ['click', 'Ao clicar'],
+  ['hover', 'Ao passar o mouse'],
+  ['hoverout', 'Ao tirar o mouse'],
+  ['load', 'Ao carregar o artboard']
+];
+
+function actionSectionHTML(el){
+  function esc(v){ return (v || '').replace(/"/g, '&quot;'); }
+  const gotoId = el.getAttribute('data-ae-goto') || '';
+  const toggleTarget = el.getAttribute('data-ae-toggle') || '';
+  const callFn = el.getAttribute('data-ae-call') || '';
+  const setTextTarget = el.getAttribute('data-ae-settext') || '';
+  const setTextValue = el.getAttribute('data-ae-settext-value') || '';
+  const actionVal = gotoId ? 'goto' : (toggleTarget ? 'toggle' : (el.hasAttribute('data-ae-call') ? 'call' : (setTextTarget ? 'settext' : '')));
+  const evt = el.getAttribute('data-ae-evt') || 'click';
+  const artboardOptions = artboards.map(function(a){
+    return '<option value="' + a.id + '"' + (gotoId === a.id ? ' selected' : '') + '>' + a.name + '</option>';
+  }).join('');
+  const doc = getDoc();
+  toggleTargetCandidates = doc ? Array.from(doc.querySelectorAll('*')).filter(function(n){ return n !== el && isEditableEl(n, doc); }) : [];
+  const targetName = actionVal === 'settext' ? setTextTarget : toggleTarget;
+  const targetOptions = toggleTargetCandidates.map(function(n, i){
+    return '<option value="' + i + '"' + (targetName && n.dataset.aeName === targetName ? ' selected' : '') + '>' + esc(targetPickerLabel(n)) + '</option>';
+  }).join('');
+  const fnNames = detectFunctionNames(doc);
+  const fnDatalist = '<datalist id="pActCallFnList">' + fnNames.map(function(n){ return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>';
+  const evtOptions = AE_EVENTS.map(function(e){ return '<option value="' + e[0] + '"' + (evt === e[0] ? ' selected' : '') + '>' + e[1] + '</option>'; }).join('');
+
+  return '<div class="propsSection">Ação</div>' +
+    '<div class="row2">' +
+      '<div class="field"><label>Evento</label><select id="pActEvt">' + evtOptions + '</select></div>' +
+      '<div class="field"><label>Ação</label><select id="pActAction">' +
+        '<option value=""' + (actionVal === '' ? ' selected' : '') + '>Nada</option>' +
+        '<option value="goto"' + (actionVal === 'goto' ? ' selected' : '') + '>Navegar para artboard</option>' +
+        '<option value="toggle"' + (actionVal === 'toggle' ? ' selected' : '') + '>Mostrar/ocultar elemento</option>' +
+        '<option value="settext"' + (actionVal === 'settext' ? ' selected' : '') + '>Definir texto de elemento</option>' +
+        '<option value="call"' + (actionVal === 'call' ? ' selected' : '') + '>Chamar função JS</option>' +
+      '</select></div>' +
+    '</div>' +
+    (actionVal === 'goto' ?
+      '<div class="field"><label>Ir para</label><select id="pActGotoArtboard">' + artboardOptions + '</select></div>' +
+      '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar e no .html exportado — vira um link (se for <code>&lt;a&gt;</code>) ou um pequeno script (nos outros elementos) pro arquivo desse artboard (exporte os dois pra mesma pasta).</div>'
+      : '') +
+    (actionVal === 'toggle' ?
+      (targetOptions ?
+        '<div class="field"><label>Elemento</label><select id="pActToggleTarget">' + targetOptions + '</select></div>' +
+        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar e no .html exportado — mostra o elemento se estiver oculto, ou oculta se estiver visível.</div>'
+        : '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Não tem nenhum outro elemento nesse artboard pra escolher ainda.</div>')
+      : '') +
+    (actionVal === 'settext' ?
+      (targetOptions ?
+        '<div class="field"><label>Elemento</label><select id="pActSetTextTarget">' + targetOptions + '</select></div>' +
+        '<div class="field"><label>Novo texto</label><input type="text" id="pActSetTextValue" placeholder="ex: Concluído!" value="' + esc(setTextValue) + '"></div>' +
+        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar e no .html exportado — troca o texto do elemento escolhido por esse aqui (substitui o conteúdo dele inteiro).</div>'
+        : '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Não tem nenhum outro elemento nesse artboard pra escolher ainda.</div>')
+      : '') +
+    (actionVal === 'call' ?
+      '<div class="field"><label>Nome da função</label><input type="text" id="pActCallFn" list="pActCallFnList" placeholder="ex: minhaFuncao" value="' + esc(callFn) + '">' + fnDatalist + '</div>' +
+      '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Chama essa função (declarada na aba <code>{ } JS</code> desse artboard, com <code>function nome(){ }</code>) — dentro dela, <code>this</code> é o elemento. Funciona no modo Visualizar e no .html exportado.</div>'
+      : '');
+}
+
+function bindActionSection(el){
+  const actionSel = document.getElementById('pActAction');
+  if(actionSel){
+    actionSel.addEventListener('change', function(){
+      el.removeAttribute('data-ae-goto');
+      el.removeAttribute('data-ae-toggle');
+      el.removeAttribute('data-ae-call');
+      el.removeAttribute('data-ae-settext');
+      el.removeAttribute('data-ae-settext-value');
+      if(this.value === ''){ el.removeAttribute('data-ae-evt'); }
+      else if(this.value === 'goto'){
+        const other = artboards.find(function(a){ return a.id !== state.activeId; }) || artboards[0];
+        if(other) el.setAttribute('data-ae-goto', other.id);
+      } else if(this.value === 'toggle'){
+        const first = toggleTargetCandidates[0];
+        if(first) el.setAttribute('data-ae-toggle', ensureAeName(first));
+      } else if(this.value === 'settext'){
+        const first = toggleTargetCandidates[0];
+        if(first) el.setAttribute('data-ae-settext', ensureAeName(first));
+        el.setAttribute('data-ae-settext-value', '');
+      } else if(this.value === 'call'){
+        el.setAttribute('data-ae-call', '');
+      }
+      pushHistory(); syncCodeFromCanvas(); renderProps();
+    });
+  }
+  const evtSel = document.getElementById('pActEvt');
+  if(evtSel){
+    evtSel.addEventListener('change', function(){
+      if(this.value === 'click') el.removeAttribute('data-ae-evt');
+      else el.setAttribute('data-ae-evt', this.value);
+      pushHistory(); syncCodeFromCanvas();
+    });
+  }
+  const gotoSel = document.getElementById('pActGotoArtboard');
+  if(gotoSel){
+    gotoSel.addEventListener('change', function(){
+      el.setAttribute('data-ae-goto', this.value);
+      pushHistory(); syncCodeFromCanvas();
+    });
+  }
+  const toggleSel = document.getElementById('pActToggleTarget');
+  if(toggleSel){
+    toggleSel.addEventListener('change', function(){
+      const target = toggleTargetCandidates[parseInt(this.value, 10)];
+      if(target) el.setAttribute('data-ae-toggle', ensureAeName(target));
+      pushHistory(); syncCodeFromCanvas();
+    });
+  }
+  const callFnInput = document.getElementById('pActCallFn');
+  if(callFnInput){
+    callFnInput.addEventListener('input', function(){
+      el.setAttribute('data-ae-call', this.value.trim());
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    });
+  }
+  const setTextSel = document.getElementById('pActSetTextTarget');
+  if(setTextSel){
+    setTextSel.addEventListener('change', function(){
+      const target = toggleTargetCandidates[parseInt(this.value, 10)];
+      if(target) el.setAttribute('data-ae-settext', ensureAeName(target));
+      pushHistory(); syncCodeFromCanvas();
+    });
+  }
+  const setTextValueInput = document.getElementById('pActSetTextValue');
+  if(setTextValueInput){
+    setTextValueInput.addEventListener('input', function(){
+      el.setAttribute('data-ae-settext-value', this.value);
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    });
+  }
+}
+
 // ---------- element attributes (not CSS — placeholder, href, alt…) ----------
 
 function attributesSectionHTML(el, opts){
   function esc(v){ return (v || '').replace(/"/g, '&quot;'); }
   const tag = el.tagName;
   if(tag === 'INPUT'){
+    const inputType = el.getAttribute('type') || 'text';
+    const isCheckable = inputType === 'checkbox' || inputType === 'radio';
     return '<div class="propsSection">Campo (input)</div>' +
       '<div class="row2">' +
-        '<div class="field"><label>Tipo</label><select id="pAttrType">' + opts(['text', 'email', 'password', 'number', 'tel', 'url', 'search', 'date', 'checkbox', 'radio'], el.getAttribute('type') || 'text') + '</select></div>' +
-        '<div class="field"><label>Nome</label><input type="text" id="pAttrName" value="' + esc(el.getAttribute('name')) + '"></div>' +
+        '<div class="field"><label>Tipo</label><select id="pAttrType">' + opts(['text', 'email', 'password', 'number', 'tel', 'url', 'search', 'date', 'checkbox', 'radio'], inputType) + '</select></div>' +
+        '<div class="field"><label>Nome' + (isCheckable ? ' (grupo)' : '') + '</label><div class="fieldRow" style="display:flex; gap:4px;"><input type="text" id="pAttrName" value="' + esc(el.getAttribute('name')) + '" style="flex:1;">' +
+          (inputType === 'radio' ? '<button type="button" class="miniBtn" id="pRadioGroup" title="Dá o mesmo nome pra todos os rádios irmãos, pra virarem um grupo exclusivo">🔗 Agrupar</button>' : '') +
+        '</div></div>' +
       '</div>' +
-      '<div class="field"><label>Placeholder</label><input type="text" id="pAttrPlaceholder" value="' + esc(el.getAttribute('placeholder')) + '"></div>' +
-      '<div class="field"><label>Valor padrão</label><input type="text" id="pAttrValue" value="' + esc(el.getAttribute('value')) + '"></div>';
+      (isCheckable ?
+        '<div class="field"><label class="checkField"><input type="checkbox" id="pAttrChecked"' + (el.hasAttribute('checked') ? ' checked' : '') + '> Marcado por padrão</label></div>'
+        :
+        '<div class="field"><label>Placeholder</label><input type="text" id="pAttrPlaceholder" value="' + esc(el.getAttribute('placeholder')) + '"></div>') +
+      '<div class="field"><label>Valor' + (isCheckable ? ' (enviado quando marcado)' : ' padrão') + '</label><input type="text" id="pAttrValue" value="' + esc(el.getAttribute('value')) + '"></div>';
   }
   if(tag === 'TEXTAREA'){
     return '<div class="propsSection">Campo (textarea)</div>' +
@@ -1484,30 +2015,22 @@ function attributesSectionHTML(el, opts){
       '</select></div>' +
       (isGoto ?
         '<div class="field"><label>Ir para</label><select id="pAttrGotoArtboard">' + artboardOptions + '</select></div>' +
-        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar — clicar no link leva até esse artboard. No .html exportado isso não navega sozinho (ainda não gera JS de verdade).</div>'
+        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar, e no .html exportado também — vira um link direto pro arquivo desse artboard (exporte os dois pra mesma pasta).</div>'
         :
         '<div class="field"><label>Endereço (href)</label><input type="text" id="pAttrHref" value="' + esc(href) + '"></div>' +
-        '<div class="field"><label>Abrir em</label><select id="pAttrTarget">' + opts(['_self', '_blank'], el.getAttribute('target') || '_self') + '</select></div>');
+        '<div class="field"><label>Abrir em</label><select id="pAttrTarget">' + opts(['_self', '_blank'], el.getAttribute('target') || '_self') + '</select></div>') +
+      '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Isso aqui é só pra navegação por clique. Pra outro evento (hover) ou outra ação (mostrar/ocultar, chamar função), usa a seção Ação abaixo.</div>' +
+      actionSectionHTML(el);
   }
   if(tag === 'IMG'){
     return '<div class="propsSection">Imagem</div>' +
-      '<div class="field"><label>Texto alternativo (alt)</label><input type="text" id="pAttrAlt" value="' + esc(el.getAttribute('alt')) + '"></div>';
+      '<div class="field"><label>Texto alternativo (alt)</label><input type="text" id="pAttrAlt" value="' + esc(el.getAttribute('alt')) + '"></div>' +
+      actionSectionHTML(el);
   }
   if(tag === 'BUTTON'){
-    const gotoId = el.getAttribute('data-ae-goto') || '';
-    const artboardOptions = artboards.map(function(a){
-      return '<option value="' + a.id + '"' + (gotoId === a.id ? ' selected' : '') + '>' + a.name + '</option>';
-    }).join('');
     return '<div class="propsSection">Botão</div>' +
       '<div class="field"><label>Tipo</label><select id="pAttrType">' + opts(['button', 'submit', 'reset'], el.getAttribute('type') || 'button') + '</select></div>' +
-      '<div class="field"><label>Ao clicar</label><select id="pAttrBtnAction">' +
-        '<option value=""' + (!gotoId ? ' selected' : '') + '>Nada (só visual)</option>' +
-        '<option value="goto"' + (gotoId ? ' selected' : '') + '>Navegar para artboard</option>' +
-      '</select></div>' +
-      (gotoId ?
-        '<div class="field"><label>Ir para</label><select id="pAttrGotoArtboard">' + artboardOptions + '</select></div>' +
-        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar — clicar no botão leva até esse artboard, tipo testar "Entrar" indo pra tela seguinte.</div>'
-        : '');
+      actionSectionHTML(el);
   }
   if(tag === 'FORM'){
     const gotoId = el.getAttribute('data-ae-goto') || '';
@@ -1521,11 +2044,39 @@ function attributesSectionHTML(el, opts){
       '</select></div>' +
       (gotoId ?
         '<div class="field"><label>Ir para</label><select id="pAttrGotoArtboard">' + artboardOptions + '</select></div>' +
-        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar — envia o formulário (botão type="submit" dentro dele, ou Enter num campo) e vai pra esse artboard, sem recarregar a página de verdade.</div>'
+        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar e no .html exportado — envia o formulário (botão type="submit" dentro dele, ou Enter num campo) e vai pro arquivo desse artboard (exporte os dois pra mesma pasta).</div>'
         : '') +
       '<div class="field"><label>Action (endereço de envio)</label><input type="text" id="pAttrAction" value="' + esc(el.getAttribute('action')) + '"></div>';
   }
-  return '';
+  if(tag === 'CANVAS' && el.hasAttribute('data-ae-chart')){
+    let cfg; try { cfg = JSON.parse(el.getAttribute('data-ae-chart') || '{}'); } catch(e){ cfg = {}; }
+    const labels = cfg.labels || [], values = cfg.values || [];
+    const rows = labels.map(function(l, i){ return l + ':' + (values[i] !== undefined ? values[i] : ''); }).join('\n');
+    const rowsSafe = rows.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<div class="propsSection">Gráfico</div>' +
+      '<div class="field"><label>Tipo</label><select id="pChartType">' + opts(['bar', 'line', 'pie'], cfg.type || 'bar') + '</select></div>' +
+      '<div class="field"><label>Dados (um "rótulo:valor" por linha)</label><textarea id="pChartData" rows="5" spellcheck="false">' + rowsSafe + '</textarea></div>' +
+      '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Redesenha ao vivo no editor. No .html exportado também funciona — os pixels não sobrevivem ao salvar o HTML, então o gráfico é redesenhado de novo assim que a página abre.</div>';
+  }
+  if(tag === 'TABLE'){
+    const preset = el.getAttribute('data-ae-table-style') || 'none';
+    return '<div class="propsSection">Tabela</div>' +
+      '<div class="field"><label>Estilo</label><select id="pTableStyle">' +
+        '<option value="none"' + (preset === 'none' ? ' selected' : '') + '>Nenhum</option>' +
+        '<option value="bordered"' + (preset === 'bordered' ? ' selected' : '') + '>Bordas</option>' +
+        '<option value="striped"' + (preset === 'striped' ? ' selected' : '') + '>Zebrado</option>' +
+      '</select></div>' +
+      '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Selecione 2+ células adjacentes (Ctrl/Cmd+clique) e use o menu de botão direito pra mesclar. Botão direito numa linha/coluna também move ela de posição.</div>' +
+      actionSectionHTML(el);
+  }
+  if(TEXT_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pTextType', 'Texto', tag, TEXT_TYPES) + actionSectionHTML(el);
+  if(LIST_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pListType', 'Lista', tag, LIST_TYPES) + actionSectionHTML(el);
+  if(MEDIA_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pMediaType', 'Mídia', tag, MEDIA_TYPES) + actionSectionHTML(el);
+  if(INDICATOR_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pIndicatorType', 'Indicador', tag, INDICATOR_TYPES) + actionSectionHTML(el);
+  if(CONTAINER_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pContainerType', 'Container', tag, CONTAINER_TYPES) + actionSectionHTML(el);
+  // any other element (span de ícone, td, etc.) doesn't get its own
+  // dedicated attribute fields, but can still carry an action.
+  return actionSectionHTML(el);
 }
 
 function bindAttributesSection(el){
@@ -1542,6 +2093,24 @@ function bindAttributesSection(el){
   bindAttr('pAttrName', 'name');
   bindAttr('pAttrPlaceholder', 'placeholder');
   bindAttr('pAttrValue', 'value');
+  const checkedBox = document.getElementById('pAttrChecked');
+  if(checkedBox){
+    checkedBox.addEventListener('change', function(){
+      if(checkedBox.checked) el.setAttribute('checked', ''); else el.removeAttribute('checked');
+      el.checked = checkedBox.checked; // live in the editor's own iframe too, not just the exported attribute
+      pushHistory(); syncCodeFromCanvas();
+    });
+  }
+  const radioGroupBtn = document.getElementById('pRadioGroup');
+  if(radioGroupBtn){
+    radioGroupBtn.addEventListener('click', function(){
+      const container = el.closest('form') || el.parentElement.closest('div, fieldset, section, form') || el.ownerDocument.body;
+      const siblings = Array.from(container.querySelectorAll('input[type="radio"]'));
+      const name = el.getAttribute('name') || 'grupo-' + Math.random().toString(36).slice(2, 7);
+      siblings.forEach(function(r){ r.setAttribute('name', name); });
+      pushHistory(); syncCodeFromCanvas(); renderProps();
+    });
+  }
   bindAttr('pAttrHref', 'href');
   bindAttr('pAttrTarget', 'target', 'change');
   bindAttr('pAttrAlt', 'alt');
@@ -1559,18 +2128,21 @@ function bindAttributesSection(el){
       pushHistory(); syncCodeFromCanvas(); renderProps();
     });
   }
+  // FORM is the only element left using this id — its own submit-triggered
+  // "Navegar para artboard" (button/link/generic elements now go through
+  // the shared actionSectionHTML/bindActionSection below instead).
   const btnAction = document.getElementById('pAttrBtnAction');
   if(btnAction){
     btnAction.addEventListener('change', function(){
+      el.removeAttribute('data-ae-goto');
       if(this.value === 'goto'){
         const other = artboards.find(function(a){ return a.id !== state.activeId; }) || artboards[0];
         if(other) el.setAttribute('data-ae-goto', other.id);
-      } else {
-        el.removeAttribute('data-ae-goto');
       }
       pushHistory(); syncCodeFromCanvas(); renderProps();
     });
   }
+  // shared by <a>'s own dedicated goto dropdown and FORM's submit-goto.
   const gotoSel = document.getElementById('pAttrGotoArtboard');
   if(gotoSel){
     gotoSel.addEventListener('change', function(){
@@ -1579,6 +2151,61 @@ function bindAttributesSection(el){
       pushHistory(); syncCodeFromCanvas();
     });
   }
+  const tableStyle = document.getElementById('pTableStyle');
+  if(tableStyle){
+    tableStyle.addEventListener('change', function(){ applyTableStyle(el, this.value); });
+  }
+  bindTypeSwitch('pTextType', el);
+  bindTypeSwitch('pListType', el);
+  bindTypeSwitch('pMediaType', el);
+  bindTypeSwitch('pIndicatorType', el);
+  bindTypeSwitch('pContainerType', el);
+  bindActionSection(el);
+
+  // chart type/data — parses "rótulo:valor" lines back into the JSON the
+  // canvas is drawn from, and redraws immediately so editing feels live.
+  function updateChart(mutate){
+    let cfg; try { cfg = JSON.parse(el.getAttribute('data-ae-chart') || '{}'); } catch(e){ cfg = {}; }
+    mutate(cfg);
+    el.setAttribute('data-ae-chart', JSON.stringify(cfg));
+    aeDrawChart(el);
+  }
+  const chartTypeSel = document.getElementById('pChartType');
+  if(chartTypeSel){
+    chartTypeSel.addEventListener('change', function(){
+      updateChart(function(cfg){ cfg.type = chartTypeSel.value; });
+      pushHistory(); syncCodeFromCanvas();
+    });
+  }
+  const chartDataInput = document.getElementById('pChartData');
+  if(chartDataInput){
+    chartDataInput.addEventListener('input', function(){
+      const labels = [], values = [];
+      chartDataInput.value.split('\n').forEach(function(line){
+        const i = line.indexOf(':');
+        if(i < 0) return;
+        labels.push(line.slice(0, i).trim());
+        values.push(parseFloat(line.slice(i + 1)) || 0);
+      });
+      updateChart(function(cfg){ cfg.labels = labels; cfg.values = values; });
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    });
+  }
+}
+
+// the "mostrar/ocultar" action targets an element by its data-ae-name (same
+// handle the Layers panel uses) — most elements never got one, so picking
+// an unnamed element as a toggle target assigns it a name on the spot,
+// same idea as an artboard getting its 'ab1' id at creation time.
+function ensureAeName(el){
+  if(el.dataset.aeName) return el.dataset.aeName;
+  const doc = getDoc();
+  let name;
+  do { elNameCounter++; name = 'el' + elNameCounter; }
+  while(doc && doc.querySelector('[data-ae-name="' + name + '"]'));
+  el.dataset.aeName = name;
+  return name;
 }
 
 // ---------- background pattern (dots / grid) ----------
@@ -1647,6 +2274,94 @@ function setClassRuleBody(doc, selector, newBody){
 
 // ---------- properties panel: element ----------
 
+// post-processes the flat sequence of ".propsSection" headers + field divs
+// that renderProps/renderArtboardProps build as one big HTML string —
+// groups each header with the fields that follow it (up to the next
+// header) into a collapsible body, and hides whole groups outside the
+// "Ação/Texto/Container/Lista/Mídia/Indicador/Layout/Cor" set when the
+// panel is in "Exibir" (simple) mode. Doing this as a DOM pass after the
+// fact means every section-producing code path (element attrs, action,
+// layout, appearance…) didn't need to be rewritten to nest its own fields.
+function wrapPropsSections(container){
+  const headers = Array.from(container.querySelectorAll('.propsSection'));
+  headers.forEach(function(header){
+    const key = header.childNodes[0] ? header.childNodes[0].textContent.trim() : header.textContent.trim();
+    const body = document.createElement('div');
+    body.className = 'propsSectionBody';
+    let node = header.nextSibling;
+    while(node && !(node.nodeType === 1 && node.classList && node.classList.contains('propsSection'))){
+      const next = node.nextSibling;
+      body.appendChild(node);
+      node = next;
+    }
+    header.parentNode.insertBefore(body, header.nextSibling);
+
+    const isSimpleSection = PROPS_SIMPLE_SECTIONS.indexOf(key) !== -1;
+    if(state.propsView === 'simple' && !isSimpleSection){
+      header.style.display = 'none';
+      body.style.display = 'none';
+      return;
+    }
+
+    const chev = document.createElement('span');
+    chev.className = 'chev';
+    chev.textContent = '▾';
+    header.appendChild(chev);
+    header.classList.add('collapsible');
+    const collapsed = collapsedPropsSections.has(key);
+    header.classList.toggle('collapsed', collapsed);
+    body.style.display = collapsed ? 'none' : '';
+    header.addEventListener('click', function(){
+      const nowCollapsed = body.style.display !== 'none';
+      body.style.display = nowCollapsed ? 'none' : '';
+      header.classList.toggle('collapsed', nowCollapsed);
+      if(nowCollapsed) collapsedPropsSections.add(key); else collapsedPropsSections.delete(key);
+    });
+  });
+}
+
+// live filter over whatever renderProps just built — runs as a pass on top
+// of wrapPropsSections' own Exibir/Avançado + collapsed-state visibility, so
+// it overrides both (a search should surface a match no matter which view
+// mode or collapsed state it's hiding behind). Matches against the icon
+// chip / label text of each field, and the section's own header text.
+function filterPropsBySearch(query){
+  const container = document.getElementById('propsBody');
+  if(!container) return;
+  const q = query.trim().toLowerCase();
+  if(!q){ renderProps(); return; }
+  Array.from(container.querySelectorAll('.propsSection')).forEach(function(header){
+    const body = header.nextElementSibling;
+    if(!body || !body.classList.contains('propsSectionBody')) return;
+    const headerText = (header.childNodes[0] ? header.childNodes[0].textContent : header.textContent).toLowerCase();
+    const headerMatches = headerText.indexOf(q) !== -1;
+    let sectionHasMatch = headerMatches;
+    Array.from(body.querySelectorAll('.field')).forEach(function(field){
+      const label = field.querySelector('label');
+      const prefix = field.querySelector('.iconFieldPrefix');
+      const iconField = field.querySelector('.iconField');
+      const text = ((label ? label.textContent : '') + ' ' + (prefix ? prefix.textContent : '') + ' ' + (iconField ? iconField.getAttribute('title') || '' : '')).toLowerCase();
+      const match = headerMatches || text.indexOf(q) !== -1;
+      field.style.display = match ? '' : 'none';
+      if(match) sectionHasMatch = true;
+    });
+    Array.from(body.querySelectorAll('.row2, .row3, .row4')).forEach(function(row){
+      const anyVisible = Array.from(row.children).some(function(c){ return c.style.display !== 'none'; });
+      row.style.display = anyVisible ? '' : 'none';
+    });
+    header.style.display = sectionHasMatch ? '' : 'none';
+    body.style.display = sectionHasMatch ? '' : 'none';
+  });
+}
+
+function checkboxLabelText(el){
+  return Array.from(el.childNodes).filter(function(n){ return n.nodeType === 3; }).map(function(n){ return n.textContent; }).join('').trim();
+}
+function setCheckboxLabelText(el, text){
+  Array.from(el.childNodes).filter(function(n){ return n.nodeType === 3; }).forEach(function(n){ n.remove(); });
+  el.appendChild(el.ownerDocument.createTextNode(text));
+}
+
 function renderProps(){
   if(state.artboardMode){
     const a = activeArtboard();
@@ -1668,6 +2383,16 @@ function renderProps(){
     return list.map(function(v){ return '<option value="' + v + '"' + (v === current ? ' selected' : '') + '>' + v + '</option>'; }).join('');
   }
   function px(v){ return Math.round(parseFloat(v)) || 0; }
+  function esc(v){ return (v || '').replace(/"/g, '&quot;'); }
+  function escText(v){ return (v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  const NO_TEXT_EDIT_TAGS = ['IMG', 'INPUT', 'TEXTAREA', 'SELECT', 'TABLE', 'UL', 'OL', 'IFRAME', 'VIDEO', 'AUDIO', 'HR', 'BR', 'PROGRESS', 'METER', 'FORM'];
+  const canEditText = el.children.length === 0 && NO_TEXT_EDIT_TAGS.indexOf(el.tagName) === -1;
+  // a checkbox/radio's option text lives as a loose text node next to the
+  // <input> inside its wrapping <label> — canEditText is false for it (it
+  // has a child element), so it needs its own field that only touches that
+  // text node, leaving the <input> itself alone.
+  const isCheckableLabel = el.tagName === 'LABEL' && el.children.length === 1 &&
+    el.children[0].tagName === 'INPUT' && (el.children[0].type === 'checkbox' || el.children[0].type === 'radio');
 
   const attrsHTML = attributesSectionHTML(el, opts);
   const classList = (el.className || '').trim().split(/\s+/).filter(Boolean);
@@ -1705,7 +2430,16 @@ function renderProps(){
       '<div class="field" style="color:var(--accent); font-size:12px; font-weight:700;">Editando ' + selCount + ' elementos selecionados — mudar um campo aqui muda todos.</div>'
       : '') +
     '<div class="field"><label>Elemento</label><div style="color:var(--text-dim)">' + shortLabel(el) + (selCount > 1 ? ' (principal)' : '') + '</div></div>' +
+    (canEditText && selCount <= 1 ?
+      '<div class="field"><label>Texto</label><textarea id="pTextContent" rows="2" style="resize:vertical;">' + escText(el.textContent || '') + '</textarea></div>'
+      : '') +
+    (isCheckableLabel && selCount <= 1 ?
+      '<div class="field"><label>Texto da opção</label><input type="text" id="pCheckboxLabelText" value="' + esc(checkboxLabelText(el)) + '"></div>'
+      : '') +
     '<div class="field"><label>Classe (CSS)</label><select id="pClassName">' + classSelectOptions + '</select></div>' +
+    '<div class="field"><label>ID (pra JavaScript)</label><input type="text" id="pElId" placeholder="ex: titulo-principal" value="' + esc(el.id) + '">' +
+      '<div style="color:var(--text-dim); font-size:11px; margin-top:3px;">Um id de verdade no HTML. No seu código da aba <code>{ } JS</code>, pegue o elemento com <code>document.getElementById(\'' + (el.id || 'seu-id') + '\')</code>.</div>' +
+    '</div>' +
 
     classRuleHTML +
 
@@ -1722,62 +2456,78 @@ function renderProps(){
       '<div class="field"><label>Distribuir (justify)</label>' + flexIconGroupHTML('pJustify', ['flex-start', 'center', 'flex-end', 'space-between', 'space-around'], cs.justifyContent, justifyIconIcon) + '</div>' +
       '<div class="row2">' +
         '<div class="field"><label>Quebra</label><select id="pFlexWrap">' + opts(['nowrap', 'wrap', 'wrap-reverse'], cs.flexWrap) + '</select></div>' +
-        '<div class="field"><label>Gap (px)</label><input type="number" id="pGap" value="' + (parseFloat(cs.gap) || 0) + '"></div>' +
+        '<div class="field">' + iconFieldHTML('Gap', 'pGap', parseFloat(cs.gap) || 0, 'Gap entre itens (px)') + '</div>' +
       '</div>'
       : '') +
 
     (free ?
       '<div class="row3">' +
-        '<div class="field"><label>X</label><input type="number" id="pX"></div>' +
-        '<div class="field"><label>Y</label><input type="number" id="pY"></div>' +
-        '<div class="field"><label>Z-index</label><input type="number" id="pZ" value="' + (parseInt(el.style.zIndex) || 0) + '"></div>' +
+        '<div class="field">' + iconFieldHTML('X', 'pX', '', 'Posição X (px)') + '</div>' +
+        '<div class="field">' + iconFieldHTML('Y', 'pY', '', 'Posição Y (px)') + '</div>' +
+        '<div class="field">' + iconFieldHTML('Z', 'pZ', parseInt(el.style.zIndex) || 0, 'Z-index (camada)') + '</div>' +
       '</div>'
       : '') +
 
     '<div class="propsSection">Tamanho</div>' +
     '<div class="row2">' +
-      '<div class="field"><label>Largura</label><div class="fieldRow"><input type="number" id="pW"><select id="pWUnit" title="Unidade — % é relativo ao elemento pai"><option value="px">px</option><option value="%">%</option></select></div></div>' +
-      '<div class="field"><label>Altura</label><div class="fieldRow"><input type="number" id="pH"><select id="pHUnit" title="Unidade — % é relativo ao elemento pai"><option value="px">px</option><option value="%">%</option></select></div></div>' +
+      '<div class="field"><div class="fieldRow">' + iconFieldHTML('W', 'pW', '', 'Largura') + '<select id="pWUnit" title="Unidade — % é relativo ao elemento pai"><option value="px">px</option><option value="%">%</option></select></div></div>' +
+      '<div class="field"><div class="fieldRow">' + iconFieldHTML('H', 'pH', '', 'Altura') + '<select id="pHUnit" title="Unidade — % é relativo ao elemento pai"><option value="px">px</option><option value="%">%</option></select></div></div>' +
     '</div>' +
 
-    '<div class="propsSection">Aparência</div>' +
+    '<div class="propsSection">Cor</div>' +
     '<div class="row2">' +
       '<div class="field"><label>Fundo</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pBg', cs.backgroundColor) + varDropdownHTML(doc, el.style.backgroundColor || el.style.background, 'pBgVar') + '</div></div>' +
       '<div class="field"><label>Texto</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pColor', cs.color) + varDropdownHTML(doc, el.style.color, 'pColorVar') + '</div></div>' +
     '</div>' +
+
+    '<div class="propsSection">Aparência</div>' +
     '<div class="row2">' +
       '<div class="field"><label>Fonte (família)</label><select id="pFontFamily">' + fontFamilyOptionsHTML(el.style.fontFamily) + '</select></div>' +
       '<div class="field"><label>Peso</label><select id="pFontWeight">' + opts(['400', '500', '600', '700', '800'], el.style.fontWeight || '400') + '</select></div>' +
     '</div>' +
     '<div class="row2">' +
-      '<div class="field"><label>Fonte (px)</label><input type="number" id="pFont" value="' + (parseFloat(cs.fontSize) || 14) + '"></div>' +
-      '<div class="field"><label>Cantos (px)</label><input type="number" id="pRadius" value="' + (parseFloat(cs.borderRadius) || 0) + '"></div>' +
+      '<div class="field">' + iconFieldHTML('Aa', 'pFont', parseFloat(cs.fontSize) || 14, 'Tamanho da fonte (px)') + '</div>' +
+      '<div class="field"><label>Opacidade (' + Math.round((parseFloat(cs.opacity) || 1) * 100) + '%)</label><input type="range" id="pOpacity" min="0" max="100" value="' + Math.round((parseFloat(cs.opacity) || 1) * 100) + '"></div>' +
     '</div>' +
-    '<div class="field"><label>Opacidade (' + Math.round((parseFloat(cs.opacity) || 1) * 100) + '%)</label><input type="range" id="pOpacity" min="0" max="100" value="' + Math.round((parseFloat(cs.opacity) || 1) * 100) + '"></div>' +
     '<div class="row2">' +
+      '<div class="field">' + iconFieldHTML('Blur', 'pBlur', parseFloat(((el.style.filter || cs.filter || '').match(/blur\(([\d.]+)px\)/) || [])[1]) || 0, 'Desfoque (blur, px)', ' min="0"') + '</div>' +
       '<div class="field"><label>Padrão de fundo</label><select id="pBgPattern">' + opts(['none', 'dots', 'grid'], currentBgPattern(el)) + '</select></div>' +
-      '<div class="field"><label>Cor do padrão</label><input type="color" id="pBgPatternColor" value="' + rgbToHex(cs.borderTopColor) + '"></div>' +
+    '</div>' +
+    '<div class="field"><label>Cor do padrão</label>' + colorSwatchHTML('pBgPatternColor', rgbToHex(cs.borderTopColor)) + '</div>' +
+
+    '<div class="propsSection" style="display:flex; align-items:center; gap:6px;">Cantos' +
+      '<button type="button" id="pRadiusLock" class="miniBtn active" title="Vincular os 4 cantos" style="margin-left:auto; padding:1px 6px; font-size:11px;">🔗</button>' +
+    '</div>' +
+    '<div class="row4">' +
+      '<div class="field">' + iconFieldHTML('TL', 'pRadiusTL', px(cs.borderTopLeftRadius), 'Topo-esquerda') + '</div>' +
+      '<div class="field">' + iconFieldHTML('TR', 'pRadiusTR', px(cs.borderTopRightRadius), 'Topo-direita') + '</div>' +
+      '<div class="field">' + iconFieldHTML('BR', 'pRadiusBR', px(cs.borderBottomRightRadius), 'Baixo-direita') + '</div>' +
+      '<div class="field">' + iconFieldHTML('BL', 'pRadiusBL', px(cs.borderBottomLeftRadius), 'Baixo-esquerda') + '</div>' +
     '</div>' +
 
-    '<div class="propsSection">Padding</div>' +
+    '<div class="propsSection" style="display:flex; align-items:center; gap:6px;">Padding' +
+      '<button type="button" id="pPadLock" class="miniBtn" title="Vincular os 4 lados" style="margin-left:auto; padding:1px 6px; font-size:11px;">🔗</button>' +
+    '</div>' +
     '<div class="row4">' +
-      '<div class="field"><label>Topo</label><input type="number" id="pPadT" value="' + px(cs.paddingTop) + '"></div>' +
-      '<div class="field"><label>Dir.</label><input type="number" id="pPadR" value="' + px(cs.paddingRight) + '"></div>' +
-      '<div class="field"><label>Baixo</label><input type="number" id="pPadB" value="' + px(cs.paddingBottom) + '"></div>' +
-      '<div class="field"><label>Esq.</label><input type="number" id="pPadL" value="' + px(cs.paddingLeft) + '"></div>' +
+      '<div class="field">' + iconFieldHTML('T', 'pPadT', px(cs.paddingTop), 'Topo') + '</div>' +
+      '<div class="field">' + iconFieldHTML('R', 'pPadR', px(cs.paddingRight), 'Direita') + '</div>' +
+      '<div class="field">' + iconFieldHTML('B', 'pPadB', px(cs.paddingBottom), 'Baixo') + '</div>' +
+      '<div class="field">' + iconFieldHTML('L', 'pPadL', px(cs.paddingLeft), 'Esquerda') + '</div>' +
     '</div>' +
 
-    '<div class="propsSection">Margin</div>' +
+    '<div class="propsSection" style="display:flex; align-items:center; gap:6px;">Margin' +
+      '<button type="button" id="pMarLock" class="miniBtn" title="Vincular os 4 lados" style="margin-left:auto; padding:1px 6px; font-size:11px;">🔗</button>' +
+    '</div>' +
     '<div class="row4">' +
-      '<div class="field"><label>Topo</label><input type="number" id="pMarT" value="' + px(cs.marginTop) + '"></div>' +
-      '<div class="field"><label>Dir.</label><input type="number" id="pMarR" value="' + px(cs.marginRight) + '"></div>' +
-      '<div class="field"><label>Baixo</label><input type="number" id="pMarB" value="' + px(cs.marginBottom) + '"></div>' +
-      '<div class="field"><label>Esq.</label><input type="number" id="pMarL" value="' + px(cs.marginLeft) + '"></div>' +
+      '<div class="field">' + iconFieldHTML('T', 'pMarT', px(cs.marginTop), 'Topo') + '</div>' +
+      '<div class="field">' + iconFieldHTML('R', 'pMarR', px(cs.marginRight), 'Direita') + '</div>' +
+      '<div class="field">' + iconFieldHTML('B', 'pMarB', px(cs.marginBottom), 'Baixo') + '</div>' +
+      '<div class="field">' + iconFieldHTML('L', 'pMarL', px(cs.marginLeft), 'Esquerda') + '</div>' +
     '</div>' +
 
     '<div class="propsSection">Borda</div>' +
     '<div class="row2">' +
-      '<div class="field"><label>Espessura (px)</label><input type="number" id="pBorderW" value="' + px(cs.borderTopWidth) + '"></div>' +
+      '<div class="field">' + iconFieldHTML('Esp', 'pBorderW', px(cs.borderTopWidth), 'Espessura da borda (px)') + '</div>' +
       '<div class="field"><label>Estilo</label><select id="pBorderStyle">' + opts(['none', 'solid', 'dashed', 'dotted'], cs.borderTopStyle === 'none' ? 'none' : cs.borderTopStyle) + '</select></div>' +
     '</div>' +
     '<div class="field"><label>Cor da borda</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pBorderColor', cs.borderTopColor) + varDropdownHTML(doc, el.style.borderColor, 'pBorderColorVar') + '</div></div>' +
@@ -1786,6 +2536,7 @@ function renderProps(){
     '<div class="field">' +
       '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">' +
         '<label>CSS livre (style)</label>' +
+        '<button type="button" id="pExtractClass" class="miniBtn" title="Cria uma classe nova com esse estilo inline e aplica no elemento" style="font-size:11px; padding:2px 8px;"' + (el.getAttribute('style') ? '' : ' disabled') + '>→ Virar classe</button>' +
         (getRootVariables(doc).length ?
           '<select id="pInsertVarStyle" style="max-width:130px; font-size:11px;" title="Inserir variável do :root">' +
             '<option value="">+ Inserir var()...</option>' +
@@ -1809,6 +2560,31 @@ function renderProps(){
   initSizeField('pH', 'pHUnit', el.style.height, rect.height);
 
   bindAttributesSection(el);
+  const pElIdInput = document.getElementById('pElId');
+  if(pElIdInput){
+    pElIdInput.addEventListener('input', function(){
+      const v = this.value.trim();
+      if(v) el.id = v; else el.removeAttribute('id');
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    });
+  }
+  const pTextContentInput = document.getElementById('pTextContent');
+  if(pTextContentInput){
+    pTextContentInput.addEventListener('input', function(){
+      el.textContent = this.value;
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    });
+  }
+  const pCheckboxLabelTextInput = document.getElementById('pCheckboxLabelText');
+  if(pCheckboxLabelTextInput){
+    pCheckboxLabelTextInput.addEventListener('input', function(){
+      setCheckboxLabelText(el, this.value);
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    });
+  }
   const pClassNameSelect = document.getElementById('pClassName');
   pClassNameSelect.addEventListener('change', async function(){
     const val = this.value;
@@ -1848,13 +2624,14 @@ function renderProps(){
   }
 
   const pBgPattern = document.getElementById('pBgPattern');
-  const pBgPatternColor = document.getElementById('pBgPatternColor');
-  function applyPattern(){
-    effectiveSelection().forEach(function(t){ applyBgPattern(t, pBgPattern.value, pBgPatternColor.value); });
+  const pBgPatternColorBtn = document.getElementById('pBgPatternColor');
+  function applyPattern(colorOverride){
+    const color = colorOverride || (pBgPatternColorBtn ? pBgPatternColorBtn.dataset.color : '');
+    effectiveSelection().forEach(function(t){ applyBgPattern(t, pBgPattern.value, color); });
     pushHistory(); syncCodeFromCanvas();
   }
-  pBgPattern.addEventListener('change', applyPattern);
-  pBgPatternColor.addEventListener('input', applyPattern);
+  pBgPattern.addEventListener('change', function(){ applyPattern(); });
+  bindColorSwatchSimple('pBgPatternColor', function(rgba){ applyPattern(rgba); });
 
   const pDisplay = document.getElementById('pDisplay');
   pDisplay.addEventListener('change', function(){
@@ -1892,18 +2669,12 @@ function renderProps(){
   bindProp('pFontFamily', applyFontFamily, 'change');
   bindProp('pFontWeight', function(v, el){ el.style.fontWeight = v; }, 'change');
   bindProp('pFont', function(v, el){ el.style.fontSize = v + 'px'; });
-  bindProp('pRadius', function(v, el){ el.style.borderRadius = v + 'px'; });
+  bindLinkedBox('pRadiusLock', ['pRadiusTL', 'pRadiusTR', 'pRadiusBR', 'pRadiusBL'], ['borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomRightRadius', 'borderBottomLeftRadius']);
   bindProp('pOpacity', function(v, el){ el.style.opacity = (v / 100); });
+  bindProp('pBlur', function(v, el){ el.style.filter = parseFloat(v) > 0 ? 'blur(' + v + 'px)' : ''; });
 
-  bindProp('pPadT', function(v, el){ el.style.paddingTop = v + 'px'; });
-  bindProp('pPadR', function(v, el){ el.style.paddingRight = v + 'px'; });
-  bindProp('pPadB', function(v, el){ el.style.paddingBottom = v + 'px'; });
-  bindProp('pPadL', function(v, el){ el.style.paddingLeft = v + 'px'; });
-
-  bindProp('pMarT', function(v, el){ el.style.marginTop = v + 'px'; });
-  bindProp('pMarR', function(v, el){ el.style.marginRight = v + 'px'; });
-  bindProp('pMarB', function(v, el){ el.style.marginBottom = v + 'px'; });
-  bindProp('pMarL', function(v, el){ el.style.marginLeft = v + 'px'; });
+  bindLinkedBox('pPadLock', ['pPadT', 'pPadR', 'pPadB', 'pPadL'], ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft']);
+  bindLinkedBox('pMarLock', ['pMarT', 'pMarR', 'pMarB', 'pMarL'], ['marginTop', 'marginRight', 'marginBottom', 'marginLeft']);
 
   bindProp('pBorderW', function(v, el){ el.style.borderWidth = v + 'px'; if(parseFloat(v) > 0 && (!el.style.borderStyle || el.style.borderStyle === 'none')) el.style.borderStyle = 'solid'; });
   bindProp('pBorderStyle', function(v, el){ el.style.borderStyle = v; if(v !== 'none' && (!el.style.borderWidth || parseFloat(el.style.borderWidth) === 0)) el.style.borderWidth = '1px'; }, 'change');
@@ -1946,6 +2717,24 @@ function renderProps(){
       this.value = '';
     });
   }
+  const pExtractClass = document.getElementById('pExtractClass');
+  if(pExtractClass){
+    pExtractClass.addEventListener('click', async function(){
+      const inline = (el.getAttribute('style') || '').trim();
+      if(!inline) return;
+      const name = await showPrompt('Nome da nova classe (ex: card-destaque):', '', 'Virar classe');
+      if(!name || !name.trim()) return;
+      const cleanName = name.trim().replace(/^\./, '').replace(/\s+/g, '-');
+      const body = inline.split(';').map(function(d){ return d.trim(); }).filter(Boolean).join(';\n');
+      setClassRuleBody(doc, '.' + cleanName, body);
+      el.className = (el.className ? el.className + ' ' : '') + cleanName;
+      el.removeAttribute('style');
+      state.rulePickedClass = cleanName;
+      pushHistory(); syncCodeFromCanvas(); renderLayers(); renderProps();
+    });
+  }
+  wrapPropsSections(propsBody);
+  if(state.propsSearchQuery) filterPropsBySearch(state.propsSearchQuery);
 }
 
 // applies fn(value, targetEl) to every element in the current selection
@@ -1973,6 +2762,33 @@ function bindPropPrimaryOnly(id, fn, evt){
     updateOverlayLive();
     clearTimeout(codeDebounce);
     codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+  });
+}
+
+// padding/margin's 4-sides-at-once lock — a Figma-style toggle so dragging
+// one side can drive all four instead of editing each field separately.
+function bindLinkedBox(lockId, sideIds, styleProps){
+  const lockBtn = document.getElementById(lockId);
+  if(!lockBtn) return;
+  lockBtn.addEventListener('click', function(){
+    lockBtn.classList.toggle('active');
+  });
+  sideIds.forEach(function(id, i){
+    const input = document.getElementById(id);
+    if(!input) return;
+    input.addEventListener('input', function(){
+      const linked = lockBtn.classList.contains('active');
+      if(linked){
+        sideIds.forEach(function(otherId){ if(otherId !== id) document.getElementById(otherId).value = input.value; });
+      }
+      effectiveSelection().forEach(function(target){
+        if(linked) styleProps.forEach(function(p){ target.style[p] = input.value + 'px'; });
+        else target.style[styleProps[i]] = input.value + 'px';
+      });
+      updateOverlayLive();
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    });
   });
 }
 
@@ -2025,23 +2841,264 @@ function partsToRgba(p){
 function hexFromRgbParts(p){
   return '#' + [p.r, p.g, p.b].map(function(n){ return Math.round(n).toString(16).padStart(2, '0'); }).join('');
 }
+function rgbToHsv(r, g, b){
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  let h = 0;
+  if(d !== 0){
+    if(max === r) h = ((g - b) / d) % 6;
+    else if(max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if(h < 0) h += 360;
+  }
+  return { h: h, s: max === 0 ? 0 : d / max, v: max };
+}
+function hsvToRgb(h, s, v){
+  const i = Math.floor(h / 60) % 6;
+  const f = h / 60 - Math.floor(h / 60);
+  const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+  const table = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i];
+  return { r: Math.round(table[0] * 255), g: Math.round(table[1] * 255), b: Math.round(table[2] * 255) };
+}
 
 function colorSwatchHTML(id, colorStr){
   return '<button type="button" class="colorSwatchBtn" id="' + id + '" data-color="' + (colorStr || '').replace(/"/g, '&quot;') + '"><span style="background:' + (colorStr || 'transparent') + '"></span></button>';
 }
 
+// Figma-style compact numeric field: a short letter/word chip fused to the
+// input instead of a separate label row above it — same <input id=...>
+// underneath, so every existing bindProp/bindLinkedBox/getElementById call
+// keeps working untouched; only the surrounding markup changes.
+function iconFieldHTML(prefix, id, value, title, extraAttrs){
+  return '<div class="iconField" title="' + (title || '').replace(/"/g, '&quot;') + '">' +
+    '<span class="iconFieldPrefix">' + prefix + '</span>' +
+    '<input type="number" id="' + id + '" value="' + (value === undefined || value === null ? '' : value) + '"' + (extraAttrs || '') + '>' +
+  '</div>';
+}
+
 let colorPopoverOnChange = null;
+// current picker state in HSV — kept separate from RGB because dragging
+// across the S/V square or hue bar needs h/s/v individually (a round-trip
+// through RGB at every pixel of drag would lose hue at s=0 or v=0).
+let cpHSV = { h: 0, s: 0, v: 0, a: 1 };
+const CP_SWATCHES = [
+  '#ffffff', '#000000', '#f3f4f7', '#8b90a0', '#e2e4e9', '#6d8bff', '#35d0a4', '#ff6d8b',
+  '#ffb020', '#a06dff', '#25c2e3', '#ef5b5b', '#22c55e', '#0ea5e9', '#f59e0b', 'transparent'
+];
 function closeColorPopover(){
   document.getElementById('colorPopover').classList.remove('open');
   colorPopoverOnChange = null;
+  stopColorPicking();
+}
+
+// eyedropper, scoped to the app's own canvas instead of the OS-level
+// EyeDropper API (not available in every Chromium build) — reads whatever
+// color is actually rendered at the clicked spot inside an artboard.
+// Not true per-pixel sampling (a gradient or photo would read as one flat
+// color): it walks up from the clicked element until it finds a non-
+// transparent background, which covers the vast majority of UI mockups.
+let colorPickingActive = false;
+function startColorPicking(){
+  colorPickingActive = true;
+  document.getElementById('cpEyedrop').classList.add('active');
+  artboards.forEach(function(ab){
+    try { ab.dom.frame.contentDocument.documentElement.style.cursor = 'crosshair'; } catch(e){}
+  });
+}
+function stopColorPicking(){
+  colorPickingActive = false;
+  const btn = document.getElementById('cpEyedrop');
+  if(btn) btn.classList.remove('active');
+  artboards.forEach(function(ab){
+    try { ab.dom.frame.contentDocument.documentElement.style.cursor = ''; } catch(e){}
+  });
+  hideColorLoupe();
+}
+// no real per-pixel rendering (that'd mean an html2canvas-sized dependency
+// just for this), so "hovering over a letter" is approximated: if the
+// hit-tested element directly holds text, its ink color wins over any
+// background — the whole point of pointing at a letter is the letter's
+// color, not the box behind it. Only when there's no direct text does this
+// fall back to walking up for the nearest solid background.
+function hasDirectText(el){
+  return Array.from(el.childNodes).some(function(n){ return n.nodeType === 3 && n.textContent.trim(); });
+}
+// Text has no natural raster either, but unlike a solid background it's
+// mostly holes — inside an "o", between letters, around a comma. Picking
+// the parent element's ink color for the whole box (the old approach) was
+// wrong: it fired even when the cursor was over plain background next to a
+// letter. So this does the same thing as pickColorFromImage — render just
+// the character under the cursor onto an offscreen canvas with matching
+// font metrics and sample the real pixel there. Alpha tells ink from gap.
+function pickColorFromText(doc, clientX, clientY){
+  try {
+    if(!doc.caretRangeFromPoint) return null;
+    const caret = doc.caretRangeFromPoint(clientX, clientY);
+    if(!caret || caret.startContainer.nodeType !== 3) return null;
+    const textNode = caret.startContainer;
+    const data = textNode.data;
+    let idx = caret.startOffset;
+    if(idx >= data.length) idx = data.length - 1;
+    if(idx < 0 || !data[idx] || !data[idx].trim()){
+      idx = caret.startOffset - 1; // landed right after the glyph — try it
+      if(idx < 0 || !data[idx] || !data[idx].trim()) return null;
+    }
+    const charRange = doc.createRange();
+    charRange.setStart(textNode, idx);
+    charRange.setEnd(textNode, idx + 1);
+    const rect = charRange.getBoundingClientRect();
+    if(rect.width <= 0 || rect.height <= 0) return null;
+    if(clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+    const parentEl = textNode.parentElement;
+    const cs = doc.defaultView.getComputedStyle(parentEl);
+    const scale = 4; // supersample so antialiased edges don't get misread
+    const w = Math.max(1, Math.ceil(rect.width)), h = Math.max(1, Math.ceil(rect.height));
+    const canvas = doc.createElement('canvas');
+    canvas.width = w * scale; canvas.height = h * scale;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(scale, scale);
+    ctx.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + '/' + cs.lineHeight + ' ' + cs.fontFamily;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = cs.color;
+    const m = ctx.measureText(data[idx]);
+    const ascent = m.fontBoundingBoxAscent || (parseFloat(cs.fontSize) * 0.8);
+    const descent = m.fontBoundingBoxDescent || (parseFloat(cs.fontSize) * 0.2);
+    const baselineY = (h - (ascent + descent)) / 2 + ascent;
+    ctx.fillText(data[idx], 0, baselineY);
+    const px = Math.min(canvas.width - 1, Math.max(0, Math.round((clientX - rect.left) * scale)));
+    const py = Math.min(canvas.height - 1, Math.max(0, Math.round((clientY - rect.top) * scale)));
+    const d = ctx.getImageData(px, py, 1, 1).data;
+    if(d[3] < 40) return null; // hit the transparent gap inside/around the glyph
+    return 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',' + (d[3] / 255) + ')';
+  } catch(e){
+    return null;
+  }
+}
+function pickColorAt(doc, x, y){
+  const target = doc.elementFromPoint(x, y);
+  if(target && target.tagName === 'IMG'){
+    const fromPixel = pickColorFromImage(target, x, y);
+    if(fromPixel) return fromPixel;
+    // fromPixel is null for a transparent pixel or a tainted (cross-origin,
+    // non-data-URI) image — either way, fall through to the rest below.
+  }
+  if(target && hasDirectText(target)){
+    const inkColor = pickColorFromText(doc, x, y);
+    if(inkColor) return inkColor;
+    // cursor is over this element's text box but landed on empty space
+    // between/inside glyphs (or the browser lacks caretRangeFromPoint) —
+    // fall through to the background walk below, same as any other spot.
+  }
+  let el = target;
+  while(el){
+    const bg = doc.defaultView.getComputedStyle(el).backgroundColor;
+    if(parseColorParts(bg).a > 0) return bg;
+    el = el.parentElement;
+  }
+  return 'rgb(255,255,255)';
+}
+
+// <img> has no background-color to walk up to — its content IS the pixels
+// — so this reads the real pixel via an offscreen canvas at the image's
+// natural resolution, accounting for object-fit so the sampled point
+// actually matches what's under the cursor.
+function pickColorFromImage(img, clientX, clientY){
+  try {
+    if(!img.naturalWidth || !img.naturalHeight) return null;
+    const r = img.getBoundingClientRect();
+    if(r.width <= 0 || r.height <= 0) return null;
+    const boxAR = r.width / r.height, imgAR = img.naturalWidth / img.naturalHeight;
+    const fit = img.ownerDocument.defaultView.getComputedStyle(img).objectFit;
+    let drawW = r.width, drawH = r.height, offX = 0, offY = 0;
+    if(fit === 'contain' || fit === 'scale-down'){
+      if(imgAR > boxAR){ drawH = r.width / imgAR; offY = (r.height - drawH) / 2; }
+      else { drawW = r.height * imgAR; offX = (r.width - drawW) / 2; }
+    } else if(fit === 'cover'){
+      if(imgAR > boxAR){ drawW = r.height * imgAR; offX = (r.width - drawW) / 2; }
+      else { drawH = r.width / imgAR; offY = (r.height - drawH) / 2; }
+    }
+    const relX = clientX - r.left - offX, relY = clientY - r.top - offY;
+    if(relX < 0 || relY < 0 || relX > drawW || relY > drawH) return null; // letterboxed empty strip
+    const nx = Math.min(img.naturalWidth - 1, Math.floor((relX / drawW) * img.naturalWidth));
+    const ny = Math.min(img.naturalHeight - 1, Math.floor((relY / drawH) * img.naturalHeight));
+    const canvas = img.ownerDocument.createElement('canvas');
+    canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const d = ctx.getImageData(nx, ny, 1, 1).data;
+    if(d[3] === 0) return null;
+    return 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',' + (d[3] / 255) + ')';
+  } catch(e){
+    // canvas tainted by a cross-origin, non-data-URI <img src> — nothing
+    // to do but fall back to the ancestor-background walk.
+    return null;
+  }
+}
+// maps a point in an artboard's own (unscaled) document coordinates to the
+// parent page's viewport — the artboard row can be zoomed via CSS
+// transform, so this goes through the fraction of the iframe's on-screen
+// rect rather than assuming any particular scale factor.
+function artboardPointToPage(ab, x, y){
+  const doc = ab.dom.frame.contentDocument;
+  const iw = (doc && doc.documentElement.clientWidth) || ab.dom.frame.clientWidth || 1;
+  const ih = (doc && doc.documentElement.clientHeight) || ab.dom.frame.clientHeight || 1;
+  const r = ab.dom.frame.getBoundingClientRect();
+  return { x: r.left + (x / iw) * r.width, y: r.top + (y / ih) * r.height };
+}
+function showColorLoupe(pageX, pageY, colorStr){
+  const loupe = document.getElementById('cpLoupe');
+  loupe.style.left = (pageX + 18) + 'px';
+  loupe.style.top = (pageY + 18) + 'px';
+  loupe.style.display = 'flex';
+  document.getElementById('cpLoupeSwatch').style.background = colorStr;
+  document.getElementById('cpLoupeHex').textContent = hexFromRgbParts(parseColorParts(colorStr));
+}
+function hideColorLoupe(){
+  document.getElementById('cpLoupe').style.display = 'none';
+}
+function currentCpRgba(){
+  const rgb = hsvToRgb(cpHSV.h, cpHSV.s, cpHSV.v);
+  return { r: rgb.r, g: rgb.g, b: rgb.b, a: cpHSV.a };
+}
+// pushes cpHSV out to every piece of UI that reflects it, then to whoever
+// asked to be notified of the color (the swatch button that opened this).
+function renderColorPopover(fireChange){
+  const hueRgb = hsvToRgb(cpHSV.h, 1, 1);
+  document.getElementById('cpSV').style.backgroundColor = 'rgb(' + hueRgb.r + ',' + hueRgb.g + ',' + hueRgb.b + ')';
+  const svThumb = document.getElementById('cpSVThumb');
+  svThumb.style.left = (cpHSV.s * 100) + '%';
+  svThumb.style.top = ((1 - cpHSV.v) * 100) + '%';
+  document.getElementById('cpHueThumb').style.left = (cpHSV.h / 360 * 100) + '%';
+  document.getElementById('cpAlphaThumb').style.left = (cpHSV.a * 100) + '%';
+  const p = currentCpRgba();
+  document.getElementById('cpAlphaSlider').querySelector('.cpAlphaBg').style.background =
+    'linear-gradient(to right, rgba(' + p.r + ',' + p.g + ',' + p.b + ',0), rgb(' + p.r + ',' + p.g + ',' + p.b + '))';
+  const rgba = partsToRgba(p);
+  document.getElementById('cpPreview').style.setProperty('--cp-preview', rgba);
+  document.getElementById('cpText').value = p.a >= 1 ? hexFromRgbParts(p) : rgba;
+  if(fireChange && colorPopoverOnChange) colorPopoverOnChange(rgba);
 }
 function openColorPopover(swatchBtn, currentColor, onChange){
   const pop = document.getElementById('colorPopover');
   const parts = parseColorParts(currentColor);
-  document.getElementById('cpHue').value = hexFromRgbParts(parts);
-  document.getElementById('cpAlpha').value = Math.round(parts.a * 100);
-  document.getElementById('cpAlphaLabel').textContent = Math.round(parts.a * 100) + '%';
-  document.getElementById('cpText').value = partsToRgba(parts);
+  const hsv = rgbToHsv(parts.r, parts.g, parts.b);
+  cpHSV = { h: hsv.h, s: hsv.s, v: hsv.v, a: parts.a };
+  renderColorPopover(false);
+  if(!document.getElementById('cpSwatches').childElementCount){
+    document.getElementById('cpSwatches').innerHTML = CP_SWATCHES.map(function(c){
+      const bg = c === 'transparent' ? 'linear-gradient(45deg, transparent 45%, #f55 45%, #f55 55%, transparent 55%)' : c;
+      return '<button type="button" class="cpSwatch" data-color="' + c + '" style="background:' + bg + '"></button>';
+    }).join('');
+    document.getElementById('cpSwatches').addEventListener('click', function(e){
+      const btn = e.target.closest('.cpSwatch');
+      if(!btn) return;
+      const parts2 = parseColorParts(btn.dataset.color);
+      const hsv2 = rgbToHsv(parts2.r, parts2.g, parts2.b);
+      cpHSV = { h: hsv2.h, s: hsv2.s, v: hsv2.v, a: parts2.a };
+      renderColorPopover(true);
+    });
+  }
   const r = swatchBtn.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 246)) + 'px';
   pop.style.top = (r.bottom + 6) + 'px';
@@ -2064,6 +3121,87 @@ function bindColorSwatch(id, fn){
       codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
     });
   });
+}
+// standalone version for color pickers that aren't tied to the canvas
+// selection at all (artboard background, pattern color, CSS class/variable
+// editors) — just reports the picked color back, no effectiveSelection().
+function bindColorSwatchSimple(id, fn){
+  const btn = document.getElementById(id);
+  if(!btn) return;
+  btn.addEventListener('click', function(e){
+    e.stopPropagation();
+    openColorPopover(btn, btn.dataset.color, function(rgba){
+      btn.dataset.color = rgba;
+      btn.querySelector('span').style.background = rgba;
+      fn(rgba);
+    });
+  });
+}
+
+// ---------- floating text-format toolbar (bold/italic/underline/size on a
+// text selection, while inline-editing an element via double-click) ----------
+let activeEditDoc = null;
+let activeEditTarget = null;
+let activeEditArtboard = null;
+
+function hideTextFormatBar(){
+  const bar = document.getElementById('textFormatBar');
+  if(bar) bar.classList.remove('open');
+}
+function updateTextFormatBar(ab){
+  if(!activeEditDoc || !activeEditTarget || activeEditArtboard !== ab) return;
+  const doc = activeEditDoc;
+  if(doc.activeElement !== activeEditTarget || activeEditTarget.getAttribute('contenteditable') !== 'true'){ hideTextFormatBar(); return; }
+  const sel = doc.getSelection();
+  if(!sel || sel.rangeCount === 0 || sel.isCollapsed){ hideTextFormatBar(); return; }
+  const range = sel.getRangeAt(0);
+  if(!activeEditTarget.contains(range.commonAncestorContainer)){ hideTextFormatBar(); return; }
+  const rect = range.getBoundingClientRect();
+  if(rect.width === 0 && rect.height === 0){ hideTextFormatBar(); return; }
+  const top = artboardPointToPage(ab, rect.left + rect.width / 2, rect.top);
+  const bar = document.getElementById('textFormatBar');
+  bar.style.left = top.x + 'px';
+  bar.style.top = top.y + 'px';
+  bar.classList.add('open');
+}
+// wraps whatever's currently selected in a fresh <span> carrying one inline
+// style — extractContents+insertNode instead of surroundContents because the
+// selection can span multiple nodes/element boundaries (surroundContents
+// throws in that case; this doesn't care what's inside it).
+function wrapSelectionWithStyle(doc, styleProp, styleVal){
+  const sel = doc.getSelection();
+  if(!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  try {
+    const span = doc.createElement('span');
+    span.style[styleProp] = styleVal;
+    span.appendChild(range.extractContents());
+    range.insertNode(span);
+    const newRange = doc.createRange();
+    newRange.selectNodeContents(span);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+    return true;
+  } catch(e){ return false; }
+}
+function applyTextFormatCommand(cmd){
+  if(!activeEditDoc) return;
+  activeEditDoc.execCommand(cmd, false, null);
+  pushHistory(); syncCodeFromCanvas();
+  updateTextFormatBar(activeEditArtboard);
+}
+function applyTextFormatSize(delta){
+  if(!activeEditDoc) return;
+  const sel = activeEditDoc.getSelection();
+  if(!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer;
+  const currentSize = parseFloat(activeEditDoc.defaultView.getComputedStyle(node).fontSize) || 16;
+  const nextSize = Math.max(8, Math.min(96, Math.round(currentSize + delta)));
+  if(wrapSelectionWithStyle(activeEditDoc, 'fontSize', nextSize + 'px')){
+    pushHistory(); syncCodeFromCanvas();
+    updateTextFormatBar(activeEditArtboard);
+  }
 }
 
 // ---------- font family picker ----------
@@ -2128,18 +3266,18 @@ function flexBar(w, h){ return '<span class="bar" style="width:' + w + '; height
 
 function dirIconIcon(dir){
   const isCol = dir.indexOf('column') === 0;
-  const bar = isCol ? flexBar('12px', '3px') : flexBar('3px', '12px');
-  return '<span class="swatch" style="flex-direction:' + dir + ';">' + bar + bar + bar + '</span>';
+  const bar = isCol ? flexBar('100%', '3px') : flexBar('3px', '100%');
+  return '<span class="swatch" style="flex-direction:' + dir + '; gap:2.5px;">' + bar + bar + bar + '</span>';
 }
 function alignIconIcon(val){
-  const heights = val === 'stretch' ? ['100%', '100%', '100%'] : ['8px', '14px', '6px'];
-  return '<span class="swatch" style="flex-direction:row; align-items:' + val + ';">' +
-    flexBar('3px', heights[0]) + flexBar('3px', heights[1]) + flexBar('3px', heights[2]) + '</span>';
+  const heights = val === 'stretch' ? ['100%', '100%', '100%'] : ['45%', '100%', '65%'];
+  return '<span class="swatch" style="flex-direction:row; align-items:' + val + '; gap:2.5px;">' +
+    flexBar('4px', heights[0]) + flexBar('4px', heights[1]) + flexBar('4px', heights[2]) + '</span>';
 }
 function justifyIconIcon(val){
-  const gap = val.indexOf('space') === 0 ? '0' : '2px';
+  const gap = val.indexOf('space') === 0 ? '0' : '2.5px';
   return '<span class="swatch" style="flex-direction:row; justify-content:' + val + '; align-items:center; gap:' + gap + ';">' +
-    flexBar('3px', '10px') + flexBar('3px', '10px') + flexBar('3px', '10px') + '</span>';
+    flexBar('4px', '55%') + flexBar('4px', '55%') + flexBar('4px', '55%') + '</span>';
 }
 
 function flexIconGroupHTML(id, options, current, iconFn){
@@ -2171,34 +3309,118 @@ function insertionContainer(doc){
   return doc.body;
 }
 
+// ---------- gráfico (canvas) ----------
+// no external charting library — this draws straight into the canvas 2D
+// context from a small JSON config (data-ae-chart), redone on every load
+// since canvas pixels don't survive an outerHTML round-trip. The exported
+// .html gets a copy of this same function inlined into a <script>.
+function aeDrawChart(canvas){
+  let cfg;
+  try { cfg = JSON.parse(canvas.getAttribute('data-ae-chart') || '{}'); } catch(e){ cfg = {}; }
+  const type = cfg.type || 'bar';
+  const labels = cfg.labels || [];
+  const values = (cfg.values || []).map(Number);
+  const colors = cfg.colors && cfg.colors.length ? cfg.colors : ['#6d8bff', '#35d0a4', '#ff6d8b', '#ffb020', '#a06dff', '#25c2e3'];
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if(!values.length) return;
+  const max = Math.max.apply(null, values.concat([0]));
+  if(type === 'line'){
+    const pad = 24, cw = w - pad * 2, ch = h - pad * 2;
+    const stepX = values.length > 1 ? cw / (values.length - 1) : 0;
+    ctx.strokeStyle = colors[0]; ctx.lineWidth = 2; ctx.beginPath();
+    values.forEach(function(v, i){
+      const x = pad + i * stepX, y = pad + ch - (max > 0 ? (v / max) * ch : 0);
+      if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+    values.forEach(function(v, i){
+      const x = pad + i * stepX, y = pad + ch - (max > 0 ? (v / max) * ch : 0);
+      ctx.fillStyle = colors[0]; ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#888'; ctx.fillText(labels[i] || '', x, h - 6);
+    });
+  } else if(type === 'pie'){
+    const total = values.reduce(function(a, b){ return a + b; }, 0);
+    const cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 20;
+    let start = -Math.PI / 2;
+    values.forEach(function(v, i){
+      const slice = total > 0 ? (v / total) * Math.PI * 2 : 0;
+      ctx.fillStyle = colors[i % colors.length];
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, start, start + slice); ctx.closePath(); ctx.fill();
+      start += slice;
+    });
+  } else {
+    const pad = 24, cw = w - pad * 2, ch = h - pad * 2, gap = 12;
+    const barW = (cw - gap * (values.length - 1)) / values.length;
+    ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+    values.forEach(function(v, i){
+      const barH = max > 0 ? (v / max) * ch : 0;
+      const x = pad + i * (barW + gap), y = pad + ch - barH;
+      ctx.fillStyle = colors[i % colors.length];
+      ctx.fillRect(x, y, barW, barH);
+      ctx.fillStyle = '#888'; ctx.fillText(labels[i] || '', x + barW / 2, h - 6);
+    });
+  }
+}
+
+// same function, as a string, for the exported .html's own <script> — kept
+// beside aeDrawChart on purpose so a future edit to the drawing logic is
+// easy to remember to make in both places.
+const AE_DRAW_CHART_SRC = 'function aeDrawChart(c){var cfg;try{cfg=JSON.parse(c.getAttribute("data-ae-chart")||"{}");}catch(e){cfg={};}' +
+  'var type=cfg.type||"bar",labels=cfg.labels||[],values=(cfg.values||[]).map(Number),' +
+  'colors=cfg.colors&&cfg.colors.length?cfg.colors:["#6d8bff","#35d0a4","#ff6d8b","#ffb020","#a06dff","#25c2e3"];' +
+  'var ctx=c.getContext("2d"),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);if(!values.length)return;' +
+  'var max=Math.max.apply(null,values.concat([0]));' +
+  'if(type==="line"){var pad=24,cw=w-pad*2,ch=h-pad*2,stepX=values.length>1?cw/(values.length-1):0;' +
+    'ctx.strokeStyle=colors[0];ctx.lineWidth=2;ctx.beginPath();' +
+    'values.forEach(function(v,i){var x=pad+i*stepX,y=pad+ch-(max>0?(v/max)*ch:0);if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});' +
+    'ctx.stroke();ctx.font="11px sans-serif";ctx.textAlign="center";' +
+    'values.forEach(function(v,i){var x=pad+i*stepX,y=pad+ch-(max>0?(v/max)*ch:0);' +
+      'ctx.fillStyle=colors[0];ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill();' +
+      'ctx.fillStyle="#888";ctx.fillText(labels[i]||"",x,h-6);});' +
+  '}else if(type==="pie"){var total=values.reduce(function(a,b){return a+b;},0),cx=w/2,cy=h/2,r=Math.min(w,h)/2-20,start=-Math.PI/2;' +
+    'values.forEach(function(v,i){var slice=total>0?(v/total)*Math.PI*2:0;' +
+      'ctx.fillStyle=colors[i%colors.length];ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,r,start,start+slice);ctx.closePath();ctx.fill();' +
+      'start+=slice;});' +
+  '}else{var pad2=24,cw2=w-pad2*2,ch2=h-pad2*2,gap=12,barW=(cw2-gap*(values.length-1))/values.length;' +
+    'ctx.font="11px sans-serif";ctx.textAlign="center";' +
+    'values.forEach(function(v,i){var barH=max>0?(v/max)*ch2:0,x=pad2+i*(barW+gap),y=pad2+ch2-barH;' +
+      'ctx.fillStyle=colors[i%colors.length];ctx.fillRect(x,y,barW,barH);' +
+      'ctx.fillStyle="#888";ctx.fillText(labels[i]||"",x+barW/2,h-6);});' +
+  '}}';
+
+function redrawAllCharts(doc){
+  if(!doc) return;
+  Array.from(doc.querySelectorAll('canvas[data-ae-chart]')).forEach(function(c){ aeDrawChart(c); });
+}
+
 const ELEMENT_TEMPLATES = {
-  rect: { label: '▭ Div (retângulo)', build: function(doc){
+  rect: { label: '▭ Container', build: function(doc){
     const el = doc.createElement('div');
     el.style.cssText = 'width:180px; height:100px; background:#6d8bff; border-radius:8px; margin:0 0 12px;';
     return el;
   } },
-  text: { label: 'T Texto (div)', build: function(doc){
-    const el = doc.createElement('div');
-    el.textContent = 'Texto';
-    el.style.cssText = 'font-size:20px; color:#1b1d23; margin:0 0 12px;';
-    return el;
-  } },
-  span: { label: 'Span (texto em linha)', build: function(doc){
-    const el = doc.createElement('span');
-    el.textContent = 'texto';
-    el.style.cssText = 'font-size:16px; color:#1b1d23;';
-    return el;
-  } },
-  p: { label: 'Parágrafo', build: function(doc){
+  richtext: { label: 'T Texto', build: function(doc){
     const el = doc.createElement('p');
     el.textContent = 'Parágrafo de texto de exemplo.';
     el.style.cssText = 'font-size:15px; color:#333; line-height:1.6; margin:0 0 12px; max-width:480px;';
     return el;
   } },
-  h1: { label: 'Título (h1)', build: function(doc){
-    const el = doc.createElement('h1');
-    el.textContent = 'Título';
-    el.style.cssText = 'font-size:32px; font-weight:700; margin:0 0 12px; color:#1b1d23;';
+  br: { label: 'Quebra de linha (br)', build: function(doc){
+    return doc.createElement('br');
+  } },
+  figure: { label: 'Figure (com legenda)', build: function(doc){
+    const el = doc.createElement('figure');
+    el.style.cssText = 'margin:0 0 12px;';
+    const ph = doc.createElement('div');
+    ph.textContent = 'Imagem';
+    ph.style.cssText = 'width:100%; height:160px; display:flex; align-items:center; justify-content:center; background:#e2e4e9; color:#8b90a0; border-radius:8px; font-size:13px;';
+    const cap = doc.createElement('figcaption');
+    cap.textContent = 'Legenda da imagem';
+    cap.style.cssText = 'font-size:12.5px; color:#666; margin-top:6px;';
+    el.appendChild(ph); el.appendChild(cap);
     return el;
   } },
   button: { label: 'Botão', build: function(doc){
@@ -2219,7 +3441,15 @@ const ELEMENT_TEMPLATES = {
     ['Item 1', 'Item 2', 'Item 3'].forEach(function(t){ const li = doc.createElement('li'); li.textContent = t; el.appendChild(li); });
     return el;
   } },
-  table: { label: 'Tabela', build: function(doc){
+  li: { label: 'Item de lista (li) avulso', build: function(doc){
+    const el = doc.createElement('li');
+    el.textContent = 'Item de lista';
+    el.style.cssText = 'font-size:15px; color:#1b1d23;';
+    return el;
+  } },
+  table: { label: 'Tabela', build: function(doc, dataRows, cols){
+    dataRows = Math.max(1, Math.min(50, dataRows || 2));
+    cols = Math.max(1, Math.min(20, cols || 2));
     const el = doc.createElement('table');
     el.style.cssText = 'border-collapse:collapse; margin:0 0 12px; font-size:14px; color:#1b1d23;';
     function row(cells, isHead){
@@ -2232,35 +3462,11 @@ const ELEMENT_TEMPLATES = {
       });
       return tr;
     }
-    el.appendChild(row(['Coluna A', 'Coluna B'], true));
-    el.appendChild(row(['Valor 1', 'Valor 2']));
-    el.appendChild(row(['Valor 3', 'Valor 4']));
-    return el;
-  } },
-  nav: { label: 'Nav (navegação)', build: function(doc){
-    const el = doc.createElement('nav');
-    el.style.cssText = 'display:flex; gap:20px; align-items:center; margin:0 0 12px;';
-    ['Início', 'Sobre', 'Contato'].forEach(function(t){
-      const a = doc.createElement('a');
-      a.textContent = t; a.href = '#';
-      a.style.cssText = 'color:#1b1d23; text-decoration:none; font-size:14px; font-weight:600;';
-      el.appendChild(a);
-    });
-    return el;
-  } },
-  section: { label: 'Section', build: function(doc){
-    const el = doc.createElement('section');
-    el.style.cssText = 'padding:24px; background:#f4f5f7; border-radius:12px; margin:0 0 12px;';
-    return el;
-  } },
-  header: { label: 'Header', build: function(doc){
-    const el = doc.createElement('header');
-    el.style.cssText = 'display:flex; align-items:center; justify-content:space-between; padding:16px 0; margin:0 0 12px;';
-    return el;
-  } },
-  footer: { label: 'Footer', build: function(doc){
-    const el = doc.createElement('footer');
-    el.style.cssText = 'padding:16px 0; color:#666; font-size:13px; margin:0 0 12px;';
+    const letters = 'ABCDEFGHIJKLMNOPQRST';
+    el.appendChild(row(Array.from({ length: cols }, function(_, i){ return 'Coluna ' + letters[i]; }), true));
+    for(let r = 1; r <= dataRows; r++){
+      el.appendChild(row(Array.from({ length: cols }, function(_, i){ return 'Valor ' + (r + i * dataRows); })));
+    }
     return el;
   } },
   form: { label: '▤ Formulário', build: function(doc){
@@ -2286,18 +3492,64 @@ const ELEMENT_TEMPLATES = {
     ['Opção 1', 'Opção 2', 'Opção 3'].forEach(function(t){ const o = doc.createElement('option'); o.textContent = t; el.appendChild(o); });
     return el;
   } },
-  checkbox: { label: 'Checkbox', build: function(doc){
+  checkbox: { label: 'Checkbox / Radio', build: function(doc){
     const el = doc.createElement('label');
     el.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:14px; margin:0 0 12px;';
     const input = doc.createElement('input'); input.type = 'checkbox';
     el.appendChild(input); el.appendChild(doc.createTextNode('Opção'));
     return el;
   } },
-  radio: { label: 'Radio', build: function(doc){
+  labelStandalone: { label: 'Label avulso', build: function(doc){
     const el = doc.createElement('label');
-    el.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:14px; margin:0 0 12px;';
-    const input = doc.createElement('input'); input.type = 'radio'; input.name = 'radio-group';
-    el.appendChild(input); el.appendChild(doc.createTextNode('Opção'));
+    el.textContent = 'Rótulo';
+    el.style.cssText = 'display:block; font-size:13px; font-weight:600; color:#333; margin:0 0 6px;';
+    return el;
+  } },
+  fieldset: { label: 'Fieldset (grupo de campos)', build: function(doc){
+    const el = doc.createElement('fieldset');
+    el.style.cssText = 'border:1px solid #d9dce4; border-radius:8px; padding:16px; margin:0 0 12px;';
+    const legend = doc.createElement('legend');
+    legend.textContent = 'Grupo';
+    legend.style.cssText = 'padding:0 6px; font-size:13px; font-weight:600; color:#333;';
+    el.appendChild(legend);
+    return el;
+  } },
+  video: { label: 'Video / Audio', build: function(doc){
+    const el = doc.createElement('video');
+    el.controls = true;
+    el.style.cssText = 'width:320px; height:180px; background:#1b1d23; border-radius:8px; display:block; margin:0 0 12px;';
+    return el;
+  } },
+  iframe: { label: 'Iframe (embed)', build: function(doc){
+    const el = doc.createElement('iframe');
+    el.src = 'about:blank';
+    el.style.cssText = 'width:400px; height:220px; border:1px solid #d9dce4; border-radius:8px; display:block; margin:0 0 12px;';
+    return el;
+  } },
+  details: { label: 'Details/summary', build: function(doc){
+    const el = doc.createElement('details');
+    el.style.cssText = 'margin:0 0 12px; font-size:14.5px; color:#1b1d23;';
+    const summary = doc.createElement('summary');
+    summary.textContent = 'Clique para expandir';
+    summary.style.cssText = 'cursor:pointer; font-weight:600;';
+    const p = doc.createElement('p');
+    p.textContent = 'Conteúdo escondido até clicar no título.';
+    p.style.cssText = 'margin:8px 0 0; color:#555;';
+    el.appendChild(summary); el.appendChild(p);
+    return el;
+  } },
+  progress: { label: 'Progress / Meter', build: function(doc){
+    const el = doc.createElement('progress');
+    el.max = 100; el.value = 60;
+    el.style.cssText = 'width:220px; display:block; margin:0 0 12px;';
+    return el;
+  } },
+  chart: { label: '📊 Gráfico', build: function(doc){
+    const el = doc.createElement('canvas');
+    el.width = 320; el.height = 200;
+    el.style.cssText = 'display:block; margin:0 0 12px;';
+    el.setAttribute('data-ae-chart', JSON.stringify({ type: 'bar', labels: ['A', 'B', 'C'], values: [30, 55, 20], colors: ['#6d8bff', '#35d0a4', '#ff6d8b'] }));
+    aeDrawChart(el);
     return el;
   } },
   hr: { label: '— Linha', build: function(doc){
@@ -2312,11 +3564,93 @@ const ELEMENT_TEMPLATES = {
   } }
 };
 
-function addElement(type){
+// the "Texto" element (and any of these tags already in a project) picks
+// its HTML tag from this list via a "Tipo" select in Propriedades, instead
+// of the "+ Elemento" menu having one entry per tag — same idea as the
+// Tipo select an <input> or <button> already has.
+const TEXT_TYPES = [
+  ['span', 'Texto em linha (span)'],
+  ['p', 'Parágrafo (p)'],
+  ['h1', 'Título 1 (h1)'],
+  ['h2', 'Título 2 (h2)'],
+  ['h3', 'Título 3 (h3)'],
+  ['h4', 'Título 4 (h4)'],
+  ['h5', 'Título 5 (h5)'],
+  ['h6', 'Título 6 (h6)'],
+  ['blockquote', 'Citação (blockquote)'],
+  ['strong', 'Negrito (strong)'],
+  ['em', 'Itálico (em)'],
+  ['b', 'Negrito visual (b)'],
+  ['i', 'Itálico visual (i)'],
+  ['code', 'Código em linha (code)'],
+  ['pre', 'Bloco de código (pre)']
+];
+const TEXT_TYPE_TAGS = TEXT_TYPES.map(function(t){ return t[0].toUpperCase(); });
+
+// same "Tipo" trick as TEXT_TYPES, for the other menu entries that got
+// folded together: pick the specific tag from a dropdown instead of the
+// "+ Elemento" menu having one entry per tag.
+const CONTAINER_TYPES = [
+  ['div', 'Div (genérico)'], ['section', 'Section'], ['article', 'Article'], ['aside', 'Aside'],
+  ['main', 'Main'], ['header', 'Header'], ['footer', 'Footer'], ['nav', 'Nav (navegação)']
+];
+const CONTAINER_TYPE_TAGS = CONTAINER_TYPES.map(function(t){ return t[0].toUpperCase(); });
+
+const LIST_TYPES = [['ul', 'Lista (não ordenada)'], ['ol', 'Lista numerada']];
+const LIST_TYPE_TAGS = LIST_TYPES.map(function(t){ return t[0].toUpperCase(); });
+
+const MEDIA_TYPES = [['video', 'Video'], ['audio', 'Audio']];
+const MEDIA_TYPE_TAGS = MEDIA_TYPES.map(function(t){ return t[0].toUpperCase(); });
+
+const INDICATOR_TYPES = [['progress', 'Progress'], ['meter', 'Meter']];
+const INDICATOR_TYPE_TAGS = INDICATOR_TYPES.map(function(t){ return t[0].toUpperCase(); });
+
+function typeSwitchHTML(fieldId, sectionLabel, tag, types){
+  const options = types.map(function(t){
+    return '<option value="' + t[0] + '"' + (t[0] === tag.toLowerCase() ? ' selected' : '') + '>' + t[1] + '</option>';
+  }).join('');
+  return '<div class="propsSection">' + sectionLabel + '</div>' +
+    '<div class="field"><label>Tipo</label><select id="' + fieldId + '">' + options + '</select></div>';
+}
+
+function bindTypeSwitch(fieldId, el){
+  const sel = document.getElementById(fieldId);
+  if(!sel) return;
+  sel.addEventListener('change', function(){
+    const next = convertElementTag(el, this.value);
+    renderLayers();
+    selectElement(next);
+    pushHistory(); syncCodeFromCanvas();
+  });
+}
+
+// swaps an element's tag while keeping its content, attributes and (so
+// anything already targeting it by data-ae-name/data-ae-eid/etc. keeps
+// working) — the DOM has no "just change the tag" primitive, so this
+// builds a replacement and moves everything over by hand.
+function convertElementTag(el, newTag){
+  const doc = el.ownerDocument;
+  const next = doc.createElement(newTag);
+  Array.from(el.attributes).forEach(function(attr){ next.setAttribute(attr.name, attr.value); });
+  while(el.firstChild) next.appendChild(el.firstChild);
+  el.parentNode.replaceChild(next, el);
+  return next;
+}
+
+async function addElement(type){
   const doc = getDoc();
   const tpl = ELEMENT_TEMPLATES[type];
   if(!doc || !tpl) return;
-  const el = tpl.build(doc);
+  let el;
+  if(type === 'table'){
+    const rowsStr = await showPrompt('Quantas linhas de dados? (sem contar o cabeçalho)', '2', 'Nova tabela');
+    if(rowsStr === null) return;
+    const colsStr = await showPrompt('Quantas colunas?', '2', 'Nova tabela');
+    if(colsStr === null) return;
+    el = tpl.build(doc, parseInt(rowsStr, 10), parseInt(colsStr, 10));
+  } else {
+    el = tpl.build(doc);
+  }
   insertionContainer(doc).appendChild(el);
   selectElement(el);
   renderLayers();
@@ -2602,7 +3936,7 @@ function buildExportSVG(ab){
   if(!doc) return null;
   const clone = doc.documentElement.cloneNode(true);
   clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
-  ['data-ae-name', 'data-ae-locked', 'data-ae-group', 'data-ae-goto'].forEach(function(attr){
+  ['data-ae-name', 'data-ae-locked', 'data-ae-group', 'data-ae-goto', 'data-ae-toggle', 'data-ae-call', 'data-ae-evt', 'data-ae-settext', 'data-ae-settext-value'].forEach(function(attr){
     clone.querySelectorAll('[' + attr + ']').forEach(function(n){ n.removeAttribute(attr); });
   });
   const xhtml = new XMLSerializer().serializeToString(clone);
@@ -2842,6 +4176,19 @@ function bindPanelToggle(btnId, panelId){
 bindPanelToggle('btnToggleLayers', 'layersPanel');
 bindPanelToggle('btnToggleProps', 'propsPanel');
 
+function setPropsView(view){
+  state.propsView = view;
+  document.getElementById('propsViewSimple').classList.toggle('active', view === 'simple');
+  document.getElementById('propsViewFull').classList.toggle('active', view === 'full');
+  renderProps();
+}
+document.getElementById('propsViewSimple').addEventListener('click', function(){ setPropsView('simple'); });
+document.getElementById('propsViewFull').addEventListener('click', function(){ setPropsView('full'); });
+document.getElementById('propsSearch').addEventListener('input', function(){
+  state.propsSearchQuery = this.value;
+  filterPropsBySearch(this.value);
+});
+
 function bindPanelResize(handleId, panelId, fromRightEdge){
   const handle = document.getElementById(handleId);
   const panel = document.getElementById(panelId);
@@ -2882,13 +4229,22 @@ bindPanelResize('propsResizeHandle', 'propsPanel', false);
 
 document.getElementById('btnCode').addEventListener('click', function(){
   codePanel.classList.toggle('open');
-  if(codePanel.classList.contains('open')) syncCodeFromCanvas();
+  if(codePanel.classList.contains('open')){ setCodeTab('html'); }
+});
+// JS gets its own toolbar button — same panel as "Código", but it opens
+// straight to the JS tab instead of making people find it by first opening
+// the HTML view and then noticing the tab switcher.
+document.getElementById('btnJs').addEventListener('click', function(){
+  codePanel.classList.add('open');
+  setCodeTab('js');
 });
 document.getElementById('btnCodeApply').addEventListener('click', applyCodeToCanvas);
 document.getElementById('btnCodeCopy').addEventListener('click', function(){
   codeArea.select();
   document.execCommand('copy');
 });
+document.getElementById('codeTabHtml').addEventListener('click', function(){ setCodeTab('html'); });
+document.getElementById('codeTabJs').addEventListener('click', function(){ setCodeTab('js'); });
 
 document.getElementById('btnTheme').addEventListener('click', function(){
   const cur = document.documentElement.getAttribute('data-theme');
@@ -3103,6 +4459,156 @@ function addTableColumn(table){
   pushHistory(); syncCodeFromCanvas();
 }
 
+function applyTableStyle(table, preset){
+  table.setAttribute('data-ae-table-style', preset);
+  let dataRowIndex = 0;
+  Array.from(table.querySelectorAll('tr')).forEach(function(row){
+    const isHead = row.children.length > 0 && row.children[0].tagName === 'TH';
+    const stripe = !isHead && (dataRowIndex++ % 2 === 1);
+    Array.from(row.children).forEach(function(cell){
+      if(preset === 'bordered'){
+        cell.style.border = '2px solid #8b90a0';
+        cell.style.backgroundColor = '';
+      } else if(preset === 'striped'){
+        cell.style.border = '1px solid #ccc';
+        cell.style.backgroundColor = stripe ? 'rgba(0,0,0,0.045)' : '';
+      } else {
+        cell.style.border = '1px solid #ccc';
+        cell.style.backgroundColor = '';
+      }
+    });
+  });
+  pushHistory(); syncCodeFromCanvas();
+}
+
+// only handles the simple, common cases: cells contiguous in one row (colspan)
+// or contiguous down one column (rowspan) — enough for the everyday "merge
+// this with the one next to it" case, not general spreadsheet-style merging
+// across an already-merged table.
+function tableCellColIndex(cell){
+  return Array.from(cell.parentElement.children).indexOf(cell);
+}
+function getMergeableTableCells(){
+  const items = effectiveSelection();
+  if(items.length < 2) return null;
+  if(!items.every(function(el){ return el.tagName === 'TD' || el.tagName === 'TH'; })) return null;
+  const table = items[0].closest('table');
+  if(!table || !items.every(function(el){ return el.closest('table') === table; })) return null;
+  const sameRow = items.every(function(el){ return el.parentElement === items[0].parentElement; });
+  if(sameRow){
+    const sorted = items.slice().sort(function(a, b){ return tableCellColIndex(a) - tableCellColIndex(b); });
+    for(let i = 1; i < sorted.length; i++){
+      if(tableCellColIndex(sorted[i]) !== tableCellColIndex(sorted[i - 1]) + 1) return null;
+    }
+    return { type: 'h', cells: sorted };
+  }
+  const col = tableCellColIndex(items[0]);
+  const sameCol = items.every(function(el){ return tableCellColIndex(el) === col; });
+  if(sameCol){
+    const rows = Array.from(table.querySelectorAll('tr'));
+    const sorted = items.slice().sort(function(a, b){ return rows.indexOf(a.parentElement) - rows.indexOf(b.parentElement); });
+    for(let i = 1; i < sorted.length; i++){
+      if(rows.indexOf(sorted[i].parentElement) !== rows.indexOf(sorted[i - 1].parentElement) + 1) return null;
+    }
+    return { type: 'v', cells: sorted };
+  }
+  return null;
+}
+function mergeTableCells(group){
+  const doc = group.cells[0].ownerDocument;
+  const first = group.cells[0];
+  const rest = group.cells.slice(1);
+  const attr = group.type === 'h' ? 'colspan' : 'rowspan';
+  const span = group.cells.reduce(function(sum, c){ return sum + (parseInt(c.getAttribute(attr), 10) || 1); }, 0);
+  first.setAttribute(attr, String(span));
+  rest.forEach(function(c){
+    const text = c.textContent.trim();
+    if(text) first.appendChild(doc.createTextNode((first.textContent.trim() ? ' ' : '') + text));
+    c.remove();
+  });
+  state.multiSelect = new Set();
+  selectElement(first);
+  renderLayers();
+  pushHistory(); syncCodeFromCanvas();
+}
+
+function moveTableRow(row, dir){
+  const table = row.closest('table');
+  if(!table) return;
+  const rows = Array.from(table.querySelectorAll('tr'));
+  const target = rows[rows.indexOf(row) + dir];
+  // rows can live directly under <table> (built via DOM API, like a brand
+  // new table here) or under an implicit <tbody> the browser's HTML parser
+  // inserts on reparse (after Aplicar código, or on reload) — use the row's
+  // own parent rather than assuming which one it is.
+  if(!target || target.parentNode !== row.parentNode) return;
+  const parent = row.parentNode;
+  if(dir < 0) parent.insertBefore(row, target); else parent.insertBefore(target, row);
+  selectElement(row);
+  renderLayers();
+  pushHistory(); syncCodeFromCanvas();
+}
+function moveTableColumn(table, colIndex, dir){
+  const targetIndex = colIndex + dir;
+  if(targetIndex < 0) return;
+  Array.from(table.querySelectorAll('tr')).forEach(function(row){
+    const cell = row.children[colIndex];
+    const target = row.children[targetIndex];
+    if(!cell || !target) return;
+    if(dir < 0) row.insertBefore(cell, target); else row.insertBefore(target, cell);
+  });
+  renderLayers();
+  pushHistory(); syncCodeFromCanvas();
+}
+
+function deleteTableRow(row){
+  const table = row.closest('table');
+  if(!table) return;
+  if(table.querySelectorAll('tr').length <= 1){ showAlert('A tabela precisa ter pelo menos uma linha.'); return; }
+  const wasSelected = state.selected === row || (state.selected && row.contains(state.selected));
+  row.remove();
+  if(wasSelected) selectElement(table);
+  renderLayers();
+  pushHistory(); syncCodeFromCanvas();
+}
+
+function deleteTableColumn(table, colIndex){
+  const rows = Array.from(table.querySelectorAll('tr'));
+  if(rows.length && rows[0].children.length <= 1){ showAlert('A tabela precisa ter pelo menos uma coluna.'); return; }
+  let wasSelected = false;
+  rows.forEach(function(row){
+    const cell = row.children[colIndex];
+    if(cell){
+      if(state.selected === cell || cell.contains(state.selected)) wasSelected = true;
+      cell.remove();
+    }
+  });
+  if(wasSelected) selectElement(table);
+  renderLayers();
+  pushHistory(); syncCodeFromCanvas();
+}
+
+// swaps every cell in a row between <td> and <th> — the quick way to mark
+// (or unmark) a header row after the table already exists, instead of
+// having to rebuild it from scratch.
+function toggleTableRowHeader(row){
+  const doc = row.ownerDocument;
+  const isHead = row.children.length > 0 && row.children[0].tagName === 'TH';
+  const wasSelected = state.selected === row;
+  Array.from(row.children).forEach(function(cell){
+    const newCell = doc.createElement(isHead ? 'td' : 'th');
+    while(cell.firstChild) newCell.appendChild(cell.firstChild);
+    newCell.style.cssText = cell.style.cssText || 'border:1px solid #ccc; padding:8px 12px; text-align:left;';
+    Array.from(cell.attributes).forEach(function(attr){
+      if(attr.name !== 'style') newCell.setAttribute(attr.name, attr.value);
+    });
+    row.replaceChild(newCell, cell);
+  });
+  if(wasSelected) selectElement(row);
+  renderLayers();
+  pushHistory(); syncCodeFromCanvas();
+}
+
 function addListItem(list){
   const doc = list.ownerDocument;
   const li = doc.createElement('li');
@@ -3122,6 +4628,28 @@ function elementContextMenuItems(el){
     items.push({ separator: true });
     items.push({ label: '+ Adicionar linha', action: function(){ addTableRow(table); } });
     items.push({ label: '+ Adicionar coluna', action: function(){ addTableColumn(table); } });
+    const row = el.tagName === 'TR' ? el : (el.closest ? el.closest('tr') : null);
+    const cell = (el.tagName === 'TD' || el.tagName === 'TH') ? el : (el.closest ? el.closest('td, th') : null);
+    if(row){
+      const rows = Array.from(table.querySelectorAll('tr'));
+      const rowIdx = rows.indexOf(row);
+      const isHead = row.children.length > 0 && row.children[0].tagName === 'TH';
+      items.push({ label: (isHead ? 'Desmarcar' : 'Marcar') + ' linha como cabeçalho', action: function(){ toggleTableRowHeader(row); } });
+      items.push({ label: '↑ Mover linha pra cima', disabled: rowIdx <= 0, action: function(){ moveTableRow(row, -1); } });
+      items.push({ label: '↓ Mover linha pra baixo', disabled: rowIdx >= rows.length - 1, action: function(){ moveTableRow(row, 1); } });
+      items.push({ label: 'Excluir linha', action: function(){ deleteTableRow(row); } });
+    }
+    if(cell){
+      const colIndex = tableCellColIndex(cell);
+      const colCount = cell.parentElement.children.length;
+      items.push({ label: '← Mover coluna pra esquerda', disabled: colIndex <= 0, action: function(){ moveTableColumn(table, colIndex, -1); } });
+      items.push({ label: '→ Mover coluna pra direita', disabled: colIndex >= colCount - 1, action: function(){ moveTableColumn(table, colIndex, 1); } });
+      items.push({ label: 'Excluir coluna', action: function(){ deleteTableColumn(table, colIndex); } });
+    }
+    const mergeable = getMergeableTableCells();
+    if(mergeable){
+      items.push({ label: '⊞ Mesclar células', action: function(){ mergeTableCells(mergeable); } });
+    }
   }
   const list = (el.tagName === 'UL' || el.tagName === 'OL') ? el : (el.closest ? el.closest('ul, ol') : null);
   if(list){
@@ -3370,10 +4898,6 @@ function renderCssEditorModal(){
     const decls = parseCssDeclarations(activeRule.body);
 
     function getVal(prop){ return decls[prop] || ''; }
-    function hexVal(prop){
-      const v = decls[prop] || '';
-      return v.startsWith('#') ? v : (v ? rgbToHex(v) : '#000000');
-    }
 
     formContainer.innerHTML =
       '<div class="css-class-header-bar">' +
@@ -3391,12 +4915,12 @@ function renderCssEditorModal(){
       '</div>' +
       '<div class="row2">' +
         '<div class="field"><label>Peso (font-weight)</label><input type="text" id="css_font_weight" value="' + getVal('font-weight') + '" placeholder="ex: 600, bold"></div>' +
-        '<div class="field"><label>Cor do texto</label><div class="fieldRow" style="display:flex; gap:4px;"><input type="color" id="css_color" value="' + hexVal('color') + '">' + varDropdownHTML(doc, getVal('color'), 'css_color_var') + '</div></div>' +
+        '<div class="field"><label>Cor do texto</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('css_color', getVal('color') || '#000000') + varDropdownHTML(doc, getVal('color'), 'css_color_var') + '</div></div>' +
       '</div>' +
 
       '<div class="css-section-title">Fundo &amp; Superfície</div>' +
       '<div class="row2">' +
-        '<div class="field"><label>Cor de fundo</label><div class="fieldRow" style="display:flex; gap:4px;"><input type="color" id="css_bg_color" value="' + hexVal('background-color') + '">' + varDropdownHTML(doc, getVal('background-color'), 'css_bg_color_var') + '</div></div>' +
+        '<div class="field"><label>Cor de fundo</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('css_bg_color', getVal('background-color') || '#000000') + varDropdownHTML(doc, getVal('background-color'), 'css_bg_color_var') + '</div></div>' +
         '<div class="field"><label>Cantos (border-radius)</label><input type="text" id="css_border_radius" value="' + getVal('border-radius') + '" placeholder="ex: 8px"></div>' +
       '</div>' +
       '<div class="field"><label>Sombra (box-shadow)</label><input type="text" id="css_box_shadow" value="' + getVal('box-shadow').replace(/"/g, '&quot;') + '" placeholder="ex: 0 4px 12px rgba(0,0,0,0.1)"></div>' +
@@ -3429,7 +4953,7 @@ function renderCssEditorModal(){
       '<div class="row3">' +
         '<div class="field"><label>Espessura</label><input type="text" id="css_border_w" value="' + getVal('border-width') + '" placeholder="1px"></div>' +
         '<div class="field"><label>Estilo</label><input type="text" id="css_border_s" value="' + getVal('border-style') + '" placeholder="solid"></div>' +
-        '<div class="field"><label>Cor</label><div class="fieldRow" style="display:flex; gap:4px;"><input type="color" id="css_border_c" value="' + hexVal('border-color') + '">' + varDropdownHTML(doc, getVal('border-color'), 'css_border_c_var') + '</div></div>' +
+        '<div class="field"><label>Cor</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('css_border_c', getVal('border-color') || '#000000') + varDropdownHTML(doc, getVal('border-color'), 'css_border_c_var') + '</div></div>' +
       '</div>' +
 
       '<div class="css-section-title" style="display:flex; justify-content:space-between; align-items:center;">' +
@@ -3486,8 +5010,6 @@ function renderCssEditorModal(){
       { id: 'css_font_family', prop: 'font-family' },
       { id: 'css_font_size', prop: 'font-size' },
       { id: 'css_font_weight', prop: 'font-weight' },
-      { id: 'css_color', prop: 'color', isColor: true },
-      { id: 'css_bg_color', prop: 'background-color', isColor: true },
       { id: 'css_border_radius', prop: 'border-radius' },
       { id: 'css_box_shadow', prop: 'box-shadow' },
       { id: 'css_pad_t', prop: 'padding-top' },
@@ -3503,23 +5025,31 @@ function renderCssEditorModal(){
       { id: 'css_width', prop: 'width' },
       { id: 'css_height', prop: 'height' },
       { id: 'css_border_w', prop: 'border-width' },
-      { id: 'css_border_s', prop: 'border-style' },
-      { id: 'css_border_c', prop: 'border-color', isColor: true }
+      { id: 'css_border_s', prop: 'border-style' }
     ];
+
+    function setDecl(prop, val){
+      if(val) decls[prop] = val;
+      else delete decls[prop];
+      const updatedBody = Object.keys(decls).map(function(k){ return k + ': ' + decls[k] + ';'; }).join('\n  ');
+      rawTextarea.value = updatedBody;
+      saveCurrentClassRule(updatedBody);
+    }
 
     fieldMap.forEach(function(item){
       const input = document.getElementById(item.id);
       if(!input) return;
-      const eventName = item.isColor ? 'input' : 'change';
-      input.addEventListener(eventName, function(){
-        const val = input.value.trim();
-        if(val) decls[item.prop] = val;
-        else delete decls[item.prop];
-
-        const updatedBody = Object.keys(decls).map(function(k){ return k + ': ' + decls[k] + ';'; }).join('\n  ');
-        rawTextarea.value = updatedBody;
-        saveCurrentClassRule(updatedBody);
+      input.addEventListener('change', function(){
+        setDecl(item.prop, input.value.trim());
       });
+    });
+
+    [
+      { id: 'css_color', prop: 'color' },
+      { id: 'css_bg_color', prop: 'background-color' },
+      { id: 'css_border_c', prop: 'border-color' }
+    ].forEach(function(item){
+      bindColorSwatchSimple(item.id, function(rgba){ setDecl(item.prop, rgba); });
     });
 
     const btnApply = document.getElementById('btnApplyClassToSelected');
@@ -3563,7 +5093,8 @@ function renderCssEditorModal(){
       row.className = 'css-var-row';
 
       const isHex = v.value.startsWith('#') || v.value.startsWith('rgb');
-      const colorInputHTML = isHex ? '<input type="color" value="' + (v.value.startsWith('#') ? v.value : rgbToHex(v.value)) + '">' : '';
+      const rowColor = v.value.startsWith('#') ? v.value : rgbToHex(v.value);
+      const colorInputHTML = isHex ? '<button type="button" class="colorSwatchBtn" data-color="' + rowColor.replace(/"/g, '&quot;') + '"><span style="background:' + rowColor + '"></span></button>' : '';
 
       row.innerHTML =
         '<input type="text" class="var-name" value="' + v.name + '" placeholder="--var-name">' +
@@ -3573,7 +5104,7 @@ function renderCssEditorModal(){
 
       const nameInput = row.querySelector('.var-name');
       const valInput = row.querySelector('.var-val');
-      const colorInput = row.querySelector('input[type="color"]');
+      const colorInput = row.querySelector('.colorSwatchBtn');
       const delBtn = row.querySelector('.var-del');
 
       nameInput.addEventListener('change', function(){
@@ -3589,10 +5120,15 @@ function renderCssEditorModal(){
       });
 
       if(colorInput){
-        colorInput.addEventListener('input', function(){
-          valInput.value = colorInput.value;
-          setRootVariable(doc, nameInput.value.trim(), colorInput.value);
-          pushHistory(); syncCodeFromCanvas(); renderProps();
+        colorInput.addEventListener('click', function(e){
+          e.stopPropagation();
+          openColorPopover(colorInput, colorInput.dataset.color, function(rgba){
+            colorInput.dataset.color = rgba;
+            colorInput.querySelector('span').style.background = rgba;
+            valInput.value = rgba;
+            setRootVariable(doc, nameInput.value.trim(), rgba);
+            pushHistory(); syncCodeFromCanvas(); renderProps();
+          });
         });
       }
 
@@ -3668,38 +5204,398 @@ document.getElementById('btnNewCssVar').addEventListener('click', async function
 
 // ---------- color popover wiring (one-time — #colorPopover is permanent DOM) ----------
 
-document.getElementById('cpHue').addEventListener('input', function(){
-  const alpha = parseInt(document.getElementById('cpAlpha').value, 10) / 100;
-  const parts = parseColorParts(this.value);
-  parts.a = alpha;
-  const rgba = partsToRgba(parts);
-  document.getElementById('cpText').value = rgba;
-  if(colorPopoverOnChange) colorPopoverOnChange(rgba);
+// drags within a picker rectangle report a 0–1 fraction on each axis —
+// shared by the S/V square (uses both x and y) and the hue/alpha bars
+// (use only x), and keeps tracking on mousemove/mouseup at the window
+// level so the pointer can leave the element mid-drag without stopping.
+function bindColorDrag(el, onMove){
+  function compute(e){
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)),
+      y: Math.max(0, Math.min(1, (e.clientY - r.top) / r.height))
+    };
+  }
+  el.addEventListener('mousedown', function(e){
+    e.preventDefault();
+    onMove(compute(e));
+    function moveHandler(ev){ onMove(compute(ev)); }
+    function upHandler(){
+      window.removeEventListener('mousemove', moveHandler);
+      window.removeEventListener('mouseup', upHandler);
+    }
+    window.addEventListener('mousemove', moveHandler);
+    window.addEventListener('mouseup', upHandler);
+  });
+}
+bindColorDrag(document.getElementById('cpSV'), function(pt){
+  cpHSV.s = pt.x; cpHSV.v = 1 - pt.y;
+  renderColorPopover(true);
 });
-document.getElementById('cpAlpha').addEventListener('input', function(){
-  const pct = parseInt(this.value, 10);
-  document.getElementById('cpAlphaLabel').textContent = pct + '%';
-  const parts = parseColorParts(document.getElementById('cpHue').value);
-  parts.a = pct / 100;
-  const rgba = partsToRgba(parts);
-  document.getElementById('cpText').value = rgba;
-  if(colorPopoverOnChange) colorPopoverOnChange(rgba);
+bindColorDrag(document.getElementById('cpHueSlider'), function(pt){
+  cpHSV.h = pt.x * 360;
+  renderColorPopover(true);
+});
+bindColorDrag(document.getElementById('cpAlphaSlider'), function(pt){
+  cpHSV.a = pt.x;
+  renderColorPopover(true);
 });
 document.getElementById('cpText').addEventListener('change', function(){
   const parts = parseColorParts(this.value);
-  document.getElementById('cpHue').value = hexFromRgbParts(parts);
-  document.getElementById('cpAlpha').value = Math.round(parts.a * 100);
-  document.getElementById('cpAlphaLabel').textContent = Math.round(parts.a * 100) + '%';
-  const rgba = partsToRgba(parts);
-  this.value = rgba;
-  if(colorPopoverOnChange) colorPopoverOnChange(rgba);
+  const hsv = rgbToHsv(parts.r, parts.g, parts.b);
+  cpHSV = { h: hsv.h, s: hsv.s, v: hsv.v, a: parts.a };
+  renderColorPopover(true);
 });
+document.getElementById('cpEyedrop').addEventListener('click', function(e){
+  e.stopPropagation();
+  if(colorPickingActive) stopColorPicking(); else startColorPicking();
+});
+// mousedown preventDefault (not click) is what keeps focus — and the live
+// selection — inside the iframe's contenteditable element while these
+// buttons are used; without it the browser blurs the editable region before
+// the click even fires, collapsing the selection first.
+['tfbBold', 'tfbItalic', 'tfbUnderline', 'tfbSizeDown', 'tfbSizeUp'].forEach(function(id){
+  const btn = document.getElementById(id);
+  if(btn) btn.addEventListener('mousedown', function(e){ e.preventDefault(); });
+});
+document.getElementById('tfbBold').addEventListener('click', function(){ applyTextFormatCommand('bold'); });
+document.getElementById('tfbItalic').addEventListener('click', function(){ applyTextFormatCommand('italic'); });
+document.getElementById('tfbUnderline').addEventListener('click', function(){ applyTextFormatCommand('underline'); });
+document.getElementById('tfbSizeDown').addEventListener('click', function(){ applyTextFormatSize(-2); });
+document.getElementById('tfbSizeUp').addEventListener('click', function(){ applyTextFormatSize(2); });
 document.addEventListener('mousedown', function(e){
   const pop = document.getElementById('colorPopover');
   if(!pop.classList.contains('open')) return;
   if(pop.contains(e.target) || e.target.closest('.colorSwatchBtn')) return;
   closeColorPopover();
 });
+
+document.addEventListener('mousedown', function(e){
+  const pop = document.getElementById('colorPopover');
+  if(!pop.classList.contains('open')) return;
+  if(pop.contains(e.target) || e.target.closest('.colorSwatchBtn')) return;
+  closeColorPopover();
+});
+
+// ---------- FASE 10: Barra de fórmulas (Power Apps style) ----------
+// Syntactic sugar over document.querySelector — lets users write
+// JavaScript expressions referencing elements by their layer names
+// (data-ae-name) instead of raw selectors.
+//
+// Examples:
+//   div_1.hide()
+//   div_1.text = "hello"
+//   div_1.style.backgroundColor = "#ff0000"
+//   card_1.toggle()
+//   btn_ok.show() && card_1.hide()
+//
+// The formula is compiled to a self-contained script that runs inside
+// the artboard's iframe, with a tiny runtime that maps names to elements.
+// Exported HTML gets the same runtime inlined so formulas work standalone.
+
+// Which properties/actions show up in autocomplete after typing "name."
+const FORMULA_PROPERTIES = [
+  { name: 'text', kind: 'prop', desc: 'textContent' },
+  { name: 'html', kind: 'prop', desc: 'innerHTML' },
+  { name: 'value', kind: 'prop', desc: 'input value' },
+  { name: 'style', kind: 'obj', desc: 'CSSStyleDeclaration' },
+  { name: 'classList', kind: 'obj', desc: 'DOMTokenList' },
+  { name: 'id', kind: 'prop', desc: 'element id' },
+  { name: 'hide', kind: 'fn', desc: 'style.display = "none"' },
+  { name: 'show', kind: 'fn', desc: 'style.display = ""' },
+  { name: 'toggle', kind: 'fn', desc: 'toggle visibility' },
+  { name: 'focus', kind: 'fn', desc: 'element.focus()' },
+  { name: 'click', kind: 'fn', desc: 'element.click()' },
+  { name: 'remove', kind: 'fn', desc: 'element.remove()' },
+  { name: 'scrollIntoView', kind: 'fn', desc: 'scroll into view' }
+];
+
+// Collect all named elements from the active artboard's document.
+function getFormulaNames(){
+  const doc = getDoc();
+  if(!doc || !doc.body) return [];
+  const names = [];
+  function walk(el){
+    if(!isEditableEl(el, doc)) return;
+    if(el.dataset.aeName) names.push(el.dataset.aeName);
+    Array.from(el.children).forEach(walk);
+  }
+  Array.from(doc.body.children).forEach(walk);
+  return names;
+}
+
+// Build a small runtime script that declares each named element as a
+// variable pointing to a proxy — the proxy intercepts property access
+// so .hide(), .show(), .toggle() etc. work as sugar, while everything
+// else falls through to the real DOM element.
+function buildFormulaRuntime(doc){
+  const names = [];
+  function walk(el){
+    if(!isEditableEl(el, doc)) return;
+    if(el.dataset.aeName) names.push(el.dataset.aeName);
+    Array.from(el.children).forEach(walk);
+  }
+  if(doc && doc.body) Array.from(doc.body.children).forEach(walk);
+  if(!names.length) return '';
+
+  // One runtime per artboard — idempotent if re-run (overwrites vars).
+  const runtime =
+    '(function(){' +
+      'var _aeMap={};' +
+      'function _aeProxy(el){' +
+        'if(!el)return{};' +
+        'return new Proxy(el,{' +
+          'get:function(t,k){' +
+            'if(k==="hide")return function(){t.style.display="none";};' +
+            'if(k==="show")return function(){t.style.display="";};' +
+            'if(k==="toggle")return function(){t.style.display=t.style.display==="none"?"":"none";};' +
+            'if(k==="text")return t.textContent;' +
+            'if(k==="html")return t.innerHTML;' +
+            'if(k==="value")return t.value;' +
+            'var v=t[k];' +
+            'return typeof v==="function"?v.bind(t):v;' +
+          '},' +
+          'set:function(t,k,v){' +
+            'if(k==="text"){t.textContent=v;return true;}' +
+            'if(k==="html"){t.innerHTML=v;return true;}' +
+            'if(k==="value"){t.value=v;return true;}' +
+            't[k]=v;return true;' +
+          '}' +
+        '});' +
+      '}' +
+      names.map(function(n){
+        return '_aeMap["' + n.replace(/"/g, '\\"') + '"]=document.querySelector(\'[data-ae-name="' + n.replace(/"/g, '\\"') + '"]\');' +
+          'var ' + n.replace(/[^a-zA-Z0-9_$]/g, '_') + '=_aeProxy(_aeMap["' + n.replace(/"/g, '\\"') + '"]);';
+      }).join('') +
+    '})();';
+  return runtime;
+}
+
+// Compile a user-written formula into executable JS by prefixing the
+// runtime and wrapping the expression in a try/catch.
+function compileFormula(formula){
+  const doc = getDoc();
+  if(!doc || !doc.body) return null;
+  const runtime = buildFormulaRuntime(doc);
+  const safeNames = getFormulaNames().map(function(n){ return n.replace(/[^a-zA-Z0-9_$]/g, '_'); });
+  // basic sanity: reject assignment to unknown identifiers (typos)
+  const unknownIdRe = /\b([a-zA-Z_$][\w$]*)\b/g;
+  let m;
+  while((m = unknownIdRe.exec(formula)) !== null){
+    const id = m[1];
+    // skip JS keywords and built-ins
+    const jsKeywords = ['var','let','const','function','return','if','else','for','while','do','switch','case','break','continue','try','catch','finally','throw','new','this','true','false','null','undefined','typeof','instanceof','in','of','void','delete','document','window','console','Math','Date','JSON','parseInt','parseFloat','isNaN','isFinite','alert','confirm','prompt','setTimeout','setInterval','clearTimeout','clearInterval','encodeURI','decodeURI','encodeURIComponent','decodeURIComponent','escape','unescape','eval','String','Number','Boolean','Array','Object','RegExp','Error','Date','Map','Set','Promise','Symbol','BigInt','Infinity','NaN'];
+    if(jsKeywords.indexOf(id) !== -1) continue;
+    if(safeNames.indexOf(id) === -1 && id !== 'style' && id !== 'classList'){
+      // allow property chains like el.style.color — 'style' alone is ok
+      // but 'unknownName.something' should warn
+      const chainCheck = new RegExp('\\b' + id + '\\s*\\.');
+      if(chainCheck.test(formula)){
+        return { error: 'Nome desconhecido: "' + id + '". Use os nomes das camadas (data-ae-name) ou IDs do documento.' };
+      }
+    }
+  }
+  const wrapped = runtime + '\ntry{\n  ' + formula + ';\n}catch(e){\n  console.error("[Fórmula]", e.message);\n}';
+  return { code: wrapped };
+}
+
+// Execute the compiled formula inside the active artboard's iframe.
+function runFormula(formula){
+  const doc = getDoc();
+  const frame = getFrame();
+  if(!doc || !frame) return { ok: false, error: 'Nenhum artboard ativo.' };
+  const compiled = compileFormula(formula);
+  if(compiled.error) return { ok: false, error: compiled.error };
+  try {
+    const script = doc.createElement('script');
+    script.textContent = compiled.code;
+    doc.body.appendChild(script);
+    script.remove();
+    return { ok: true };
+  } catch(e){
+    return { ok: false, error: e.message };
+  }
+}
+
+// Autocomplete state
+let formulaAcIndex = -1;
+let formulaAcItems = [];
+
+function updateFormulaAutocomplete(){
+  const input = document.getElementById('formulaInput');
+  const list = document.getElementById('formulaAutocomplete');
+  if(!input || !list) return;
+  const val = input.value;
+  const cursor = input.selectionStart || 0;
+  const before = val.slice(0, cursor);
+
+  // Find the token before the cursor: either "name." or just "name"
+  const match = before.match(/([a-zA-Z_$][\w$]*)\.$/);
+  const nameMatch = before.match(/([a-zA-Z_$][\w$]*)$/);
+
+  list.innerHTML = '';
+  formulaAcItems = [];
+  formulaAcIndex = -1;
+
+  if(match){
+    // After a dot — suggest properties/actions
+    const prefix = match[1];
+    const names = getFormulaNames().map(function(n){ return n.replace(/[^a-zA-Z0-9_$]/g, '_'); });
+    // Only show props if the prefix is a known element name
+    if(names.indexOf(prefix) !== -1){
+      FORMULA_PROPERTIES.forEach(function(p){
+        const item = document.createElement('div');
+        item.className = 'formulaAutocompleteItem';
+        item.innerHTML = '<span>' + p.name + '</span><span class="acDesc">' + p.desc + '</span><span class="acKind">' + p.kind + '</span>';
+        item.addEventListener('mousedown', function(e){
+          e.preventDefault();
+          insertFormulaCompletion(p.name + (p.kind === 'fn' ? '()' : ''));
+        });
+        list.appendChild(item);
+        formulaAcItems.push(item);
+      });
+    }
+  } else if(nameMatch && !before.endsWith('.')){
+    // Typing a name — suggest element names
+    const typed = nameMatch[1].toLowerCase();
+    const names = getFormulaNames();
+    names.forEach(function(n){
+      const safe = n.replace(/[^a-zA-Z0-9_$]/g, '_');
+      if(safe.toLowerCase().indexOf(typed) === -1) return;
+      const item = document.createElement('div');
+      item.className = 'formulaAutocompleteItem';
+      item.innerHTML = '<span>' + safe + '</span><span class="acDesc">' + n + '</span><span class="acKind">el</span>';
+      item.addEventListener('mousedown', function(e){
+        e.preventDefault();
+        insertFormulaCompletion(safe);
+      });
+      list.appendChild(item);
+      formulaAcItems.push(item);
+    });
+  }
+
+  list.classList.toggle('open', formulaAcItems.length > 0);
+}
+
+function insertFormulaCompletion(text){
+  const input = document.getElementById('formulaInput');
+  if(!input) return;
+  const val = input.value;
+  const cursor = input.selectionStart || 0;
+  const before = val.slice(0, cursor);
+  const after = val.slice(cursor);
+
+  // Replace the token being completed
+  const replaced = before.replace(/([a-zA-Z_$][\w$]*\.?)$/, text);
+  input.value = replaced + after;
+  const newPos = replaced.length;
+  input.setSelectionRange(newPos, newPos);
+  input.focus();
+  updateFormulaAutocomplete();
+}
+
+function moveFormulaAc(dir){
+  if(!formulaAcItems.length) return false;
+  formulaAcIndex += dir;
+  if(formulaAcIndex < 0) formulaAcIndex = formulaAcItems.length - 1;
+  if(formulaAcIndex >= formulaAcItems.length) formulaAcIndex = 0;
+  formulaAcItems.forEach(function(it, i){ it.classList.toggle('active', i === formulaAcIndex); });
+  const active = formulaAcItems[formulaAcIndex];
+  if(active) active.scrollIntoView({ block: 'nearest' });
+  return true;
+}
+
+function acceptFormulaAc(){
+  if(formulaAcIndex < 0 || !formulaAcItems[formulaAcIndex]) return false;
+  formulaAcItems[formulaAcIndex].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  return true;
+}
+
+function closeFormulaAc(){
+  const list = document.getElementById('formulaAutocomplete');
+  if(list) list.classList.remove('open');
+  formulaAcItems = [];
+  formulaAcIndex = -1;
+}
+
+// Wire formula bar events
+(function wireFormulaBar(){
+  const input = document.getElementById('formulaInput');
+  const btnRun = document.getElementById('btnFormulaRun');
+  const btnToggle = document.getElementById('btnFormulaBar');
+  const wrap = document.getElementById('formulaBarWrap');
+  if(!input || !btnRun || !btnToggle || !wrap) return;
+
+  btnToggle.addEventListener('click', function(){
+    wrap.classList.toggle('open');
+    btnToggle.classList.toggle('active', wrap.classList.contains('open'));
+    if(wrap.classList.contains('open')){
+      setTimeout(function(){ input.focus(); }, 0);
+    }
+  });
+
+  input.addEventListener('input', function(){ updateFormulaAutocomplete(); });
+  input.addEventListener('keydown', function(e){
+    if(e.key === 'ArrowDown'){ e.preventDefault(); moveFormulaAc(1); }
+    else if(e.key === 'ArrowUp'){ e.preventDefault(); moveFormulaAc(-1); }
+    else if(e.key === 'Enter'){
+      e.preventDefault();
+      if(formulaAcItems.length && formulaAcIndex >= 0){
+        acceptFormulaAc();
+      } else {
+        btnRun.click();
+      }
+    }
+    else if(e.key === 'Escape'){ closeFormulaAc(); }
+    else if(e.key === 'Tab'){
+      e.preventDefault();
+      if(formulaAcItems.length) acceptFormulaAc();
+    }
+  });
+  input.addEventListener('blur', function(){ setTimeout(function(){ closeFormulaAc(); }, 150); });
+
+  btnRun.addEventListener('click', function(){
+    const formula = input.value.trim();
+    if(!formula) return;
+    const result = runFormula(formula);
+    if(!result.ok){
+      showAlert(result.error || 'Erro na fórmula.', 'Fórmula');
+    } else {
+      pushHistory(); syncCodeFromCanvas();
+      // flash success
+      input.style.borderColor = 'var(--accent)';
+      setTimeout(function(){ input.style.borderColor = ''; }, 400);
+    }
+  });
+})();
+
+// Export support: wireExportFormulas injects the same runtime + any
+// stored formulas into the exported HTML so they work standalone.
+// Formulas are stored as data-ae-formula on a small script tag in the
+// artboard's body (invisible, no side effects until the runtime runs).
+function storeFormulaInDoc(doc, formula){
+  if(!doc || !doc.body) return;
+  let tag = doc.querySelector('script[data-ae-formula]');
+  if(!tag){
+    tag = doc.createElement('script');
+    tag.setAttribute('data-ae-formula', '1');
+    doc.body.appendChild(tag);
+  }
+  const existing = (tag.textContent || '').trim();
+  tag.textContent = existing ? existing + '\n' + formula : formula;
+}
+
+function wireExportFormulas(doc, clone){
+  const formulaTag = clone.querySelector('script[data-ae-formula]');
+  if(!formulaTag) return;
+  const formulas = formulaTag.textContent;
+  formulaTag.remove();
+  const runtime = buildFormulaRuntime(doc);
+  if(!runtime && !formulas) return;
+  const script = doc.createElement('script');
+  script.textContent = (runtime || '') + '\n' + (formulas || '');
+  clone.querySelector('body').appendChild(script);
+}
 
 // ---------- init ----------
 
