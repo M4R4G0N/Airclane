@@ -233,7 +233,7 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 - [ ] Substituir a paleta atual de "cores mais usadas" por **cores recentes** de verdade
 
 **Lote 4 · Páginas ↔ Camadas (estilo Figma)**
-- [ ] Painel lateral com abas no topo: **Páginas** (lista artboards: trocar, criar, renomear, duplicar, excluir) e **Camadas** (árvore atual do artboard ativo)
+- [x] Painel lateral com abas no topo: **Páginas** (lista artboards com dimensões: trocar com clique, criar, renomear com duplo clique, duplicar ⧉ e excluir × no hover) e **Camadas** (árvore atual do artboard ativo)
 
 **Lote 5 · Minimap**
 - [ ] Mini-mapa no canto do canvas com todos os artboards em miniatura + retângulo da região visível; clicar/arrastar navega

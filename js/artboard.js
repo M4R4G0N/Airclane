@@ -113,6 +113,7 @@ function createArtboard(opts){
 
   loadDocumentInto(ab, opts.html || DEFAULT_DOC, true);
   repositionAddTile();
+  renderPagesPanel();
   return ab;
 }
 
@@ -142,6 +143,7 @@ function renameArtboard(ab){
     ab.name = v || ab.name;
     ab.dom.title.textContent = ab.name;
     input.replaceWith(ab.dom.title);
+    renderPagesPanel();
     if(state.artboardMode && state.activeId === ab.id) renderArtboardProps(ab);
   }
   input.addEventListener('blur', commit);
@@ -154,7 +156,7 @@ function renameArtboard(ab){
 
 function setActiveArtboard(id){
   artboards.forEach(function(a){ a.dom.wrap.classList.toggle('active', a.id === id); });
-  if(state.activeId === id) return;
+  if(state.activeId === id){ renderPagesPanel(); return; }
   state.activeId = id;
   state.selected = null;
   state.artboardMode = false;
@@ -162,6 +164,7 @@ function setActiveArtboard(id){
   renderLayers();
   renderProps();
   renderOverlay();
+  renderPagesPanel();
 }
 
 function selectArtboardOnly(id){
@@ -302,6 +305,7 @@ function deleteArtboard(ab){
     setActiveArtboard(artboards[0].id);
   }
   repositionAddTile();
+  renderPagesPanel();
 }
 
 function duplicateArtboard(ab){
