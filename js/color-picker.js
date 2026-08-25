@@ -70,8 +70,16 @@ const CP_SWATCHES = [
   '#ffffff', '#000000', '#f3f4f7', '#8b90a0', '#e2e4e9', '#6d8bff', '#35d0a4', '#ff6d8b',
   '#ffb020', '#a06dff', '#25c2e3', '#ef5b5b', '#22c55e', '#0ea5e9', '#f59e0b', 'transparent'
 ];
+// when the popover acts as a fill editor (backgrounds), gradient-fill.js
+// hooks tab switches through here instead of wiring the buttons itself —
+// keeps the popover's open/close lifecycle in one place.
+let cpFillTabHandler = null;
+
 function closeColorPopover(){
   document.getElementById('colorPopover').classList.remove('open');
+  document.getElementById('cpFillTabs').classList.remove('open');
+  document.getElementById('cpGradientArea').classList.remove('open');
+  cpFillTabHandler = null;
   if(cpLastPicked) pushRecentColor(cpLastPicked);
   cpLastPicked = null;
   colorPopoverOnChange = null;
@@ -292,13 +300,31 @@ function renderCpSwatches(container){
 // closes, so dragging around the picker doesn't flood the list
 let cpLastPicked = null;
 
-function openColorPopover(swatchBtn, currentColor, onChange){
+// fillMode (optional): 'solid' | 'linear' | 'radial' — shows the fill-type
+// tabs at the top and, for gradients, the gradient editor area; tab clicks
+// are reported through cpFillTabHandler (set by gradient-fill.js).
+function openColorPopover(swatchBtn, currentColor, onChange, fillMode){
   const pop = document.getElementById('colorPopover');
   const parts = parseColorParts(currentColor);
   const hsv = rgbToHsv(parts.r, parts.g, parts.b);
   cpHSV = { h: hsv.h, s: hsv.s, v: hsv.v, a: parts.a };
   cpLastPicked = null;
   renderColorPopover(false);
+  const tabs = document.getElementById('cpFillTabs');
+  tabs.classList.toggle('open', !!fillMode);
+  document.getElementById('cpGradientArea').classList.toggle('open', !!fillMode && fillMode !== 'solid');
+  if(fillMode){
+    tabs.querySelectorAll('button').forEach(function(b){
+      b.classList.toggle('active', b.dataset.fill === fillMode);
+    });
+  }
+  if(!tabs.dataset.bound){
+    tabs.dataset.bound = '1';
+    tabs.addEventListener('click', function(e){
+      const btn = e.target.closest('button[data-fill]');
+      if(btn && cpFillTabHandler) cpFillTabHandler(btn.dataset.fill);
+    });
+  }
   const cpSwatchesEl = document.getElementById('cpSwatches');
   renderCpSwatches(cpSwatchesEl);
   if(!cpSwatchesEl.dataset.bound){
@@ -317,6 +343,18 @@ function openColorPopover(swatchBtn, currentColor, onChange){
   pop.style.top = (r.bottom + 6) + 'px';
   pop.classList.add('open');
   colorPopoverOnChange = onChange;
+  clampColorPopover();
+}
+
+// the popover grows taller in fill mode (tabs + gradient editor) and can
+// spill past the viewport's bottom edge — pull it back up when that happens
+function clampColorPopover(){
+  const pop = document.getElementById('colorPopover');
+  if(!pop.classList.contains('open')) return;
+  const overflow = pop.getBoundingClientRect().bottom - (window.innerHeight - 8);
+  if(overflow > 0){
+    pop.style.top = Math.max(8, (parseFloat(pop.style.top) || 0) - overflow) + 'px';
+  }
 }
 // applies fn(value, targetEl) to every selected element when the popover's
 // color changes (bulk-edit for multi-selection, same as the other props).
