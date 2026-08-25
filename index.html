@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="css/properties-panel.css">
 <link rel="stylesheet" href="css/formula-bar.css">
 <link rel="stylesheet" href="css/code-panel.css">
+<link rel="stylesheet" href="css/js-blocks.css">
 <link rel="stylesheet" href="css/modal.css">
 <link rel="stylesheet" href="css/context-menu.css">
 <link rel="stylesheet" href="css/color-picker.css">
@@ -66,6 +67,7 @@
   <div class="grp">
     <button id="btnCode" title="Abrir/fechar painel de código"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg><span class="btnLabel">Código</span></button>
     <button id="btnJs" title="Abrir o JavaScript do artboard ativo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span class="btnLabel">JS</span></button>
+    <button id="btnJsBlocks" title="Editar o JavaScript do artboard ativo como blocos visuais"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/></svg><span class="btnLabel">Blocos</span></button>
     <button id="btnCssEditor" title="Abrir editor de CSS estruturado, biblioteca de classes e variáveis globais"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg><span class="btnLabel">CSS</span></button>
     <button id="btnFormulaBar" title="Abrir/fechar barra de fórmulas (Power Apps style)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 5 8 5 14 12 8 19 18 19"/></svg><span class="btnLabel">Fórmulas</span></button>
     <button id="btnToggleLayers" class="active" title="Mostrar/esconder painel de páginas e camadas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg><span class="btnLabel">Camadas</span></button>
@@ -243,6 +245,23 @@
   </div>
 </div>
 
+<div id="jsBlocksModal" class="modal-backdrop is-hidden">
+  <div class="jsBlocksModal__content">
+    <div class="jsBlocksModal__header">
+      <h2>Blocos JS do artboard ativo</h2>
+      <button type="button" class="jsBlocksModal__close" id="btnCloseJsBlocks" title="Fechar">✕</button>
+    </div>
+    <div class="jsBlocksModal__body">
+      <div id="jsBlocksPalette" class="jsBlocksPalette"></div>
+      <div id="jsBlocksPanel" class="jsBlocksPanel"></div>
+    </div>
+    <div class="jsBlocksModal__footer">
+      <span class="jsBlocksModal__hint">Arraste um bloco da paleta pra área de scripts. Muda pra valer no artboard só depois de "Aplicar".</span>
+      <button type="button" id="btnJsBlocksApply">Aplicar ao artboard →</button>
+    </div>
+  </div>
+</div>
+
 <script src="js/core-state.js"></script>
 <script src="js/artboard.js"></script>
 <script src="js/history.js"></script>
@@ -268,6 +287,8 @@
 <script src="js/clipboard-shortcuts.js"></script>
 <script src="js/context-menu.js"></script>
 <script src="js/css-class-editor.js"></script>
+<script src="js/js-blocks-core.js"></script>
+<script src="js/js-blocks-ui.js"></script>
 <script src="js/formula-bar.js"></script>
 <script src="js/numeric-scrub.js"></script>
 <script src="js/minimap.js"></script>

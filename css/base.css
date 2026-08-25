@@ -68,6 +68,10 @@ hr{border:none; border-top:1px solid var(--border); margin:12px 0;}
 .fieldRow .iconField{flex:1; min-width:0;}
 
 .is-hidden{display:none;}
+/* .modal-backdrop sets its own display:flex at equal specificity to
+   .is-hidden alone — this compound selector outranks it so toggling
+   is-hidden actually hides a backdrop-based modal. */
+.modal-backdrop.is-hidden{display:none;}
 
 ::-webkit-scrollbar{width:8px; height:8px;}
 ::-webkit-scrollbar-thumb{background:var(--border); border-radius:4px;}
