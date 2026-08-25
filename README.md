@@ -236,7 +236,7 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 - [x] Painel lateral com abas no topo: **Páginas** (lista artboards com dimensões: trocar com clique, criar, renomear com duplo clique, duplicar ⧉ e excluir × no hover) e **Camadas** (árvore atual do artboard ativo)
 
 **Lote 5 · Minimap**
-- [ ] Mini-mapa no canto do canvas com todos os artboards em miniatura + retângulo da região visível; clicar/arrastar navega
+- [x] Mini-mapa no canto inferior direito do canvas: todos os artboards em miniatura (o ativo destacado), retângulo da região visível, clique/arrastar pra navegar, botão − pra recolher num chip 🗺
 
 **Lote 6 · Ícones e toolbar**
 - [ ] Trocar ícones por conjunto SVG consistente (traço fino, estilo Lucide/Feather)

@@ -665,3 +665,30 @@
   }
   .pageRowBtn:hover{background:var(--bg); color:var(--text);}
   #btnNewPage{width:100%; margin-top:8px;}
+
+  /* minimap (Fase 15 · Lote 5) */
+  #minimap{
+    position:absolute; right:14px; bottom:14px; z-index:14;
+    width:220px; height:150px; background:var(--bg2); border:1px solid var(--border);
+    border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.35); overflow:hidden;
+  }
+  #minimap .minimapInner{position:absolute; inset:6px; cursor:crosshair;}
+  .minimapArtboard{
+    position:absolute; background:var(--bg3); border:1px solid var(--text-dim);
+    border-radius:2px; opacity:.85;
+  }
+  .minimapArtboard.active{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent);}
+  .minimapViewport{
+    position:absolute; border:1.5px solid var(--accent); border-radius:2px;
+    background:var(--accent-soft); pointer-events:none;
+  }
+  #minimapToggle{
+    position:absolute; top:2px; right:2px; z-index:2; width:18px; height:18px;
+    padding:0; font-size:12px; line-height:1; border-radius:5px;
+    background:transparent; border:none; color:var(--text-dim);
+  }
+  #minimapToggle:hover{background:var(--bg3); color:var(--text);}
+  #minimapChip{
+    position:absolute; right:14px; bottom:14px; z-index:14;
+    width:34px; height:34px; padding:0; border-radius:9px; font-size:15px;
+  }
