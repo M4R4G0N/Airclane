@@ -206,7 +206,7 @@ function renderProps(){
       : '') +
     '<div class="field"><label>Classe (CSS)</label><select id="pClassName">' + classSelectOptions + '</select></div>' +
     '<div class="field"><label>ID (pra JavaScript)</label><input type="text" id="pElId" placeholder="ex: titulo-principal" value="' + esc(el.id) + '">' +
-      '<div style="color:var(--text-dim); font-size:11px; margin-top:3px;">Um id de verdade no HTML. No seu código da aba <code>{ } JS</code>, pegue o elemento com <code>document.getElementById(\'' + (el.id || 'seu-id') + '\')</code>.</div>' +
+      '<div class="fieldHint">Um id de verdade no HTML. No seu código da aba <code>{ } JS</code>, pegue o elemento com <code>document.getElementById(\'' + (el.id || 'seu-id') + '\')</code>.</div>' +
     '</div>' +
 
     classRuleHTML +

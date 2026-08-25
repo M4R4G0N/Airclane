@@ -222,9 +222,10 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 - [ ] Seção **Ação** das Propriedades sai da visão principal e vai pro "Avançado"
 
 **Lote 2 · Painel de Propriedades compacto (inspirado no Figma)**
-- [ ] Campos compactos com label inline (estilo `X 0 · Y 60 · W 250 · H 30` numa linha só)
-- [ ] Títulos de seção discretos em caixa alta, divisórias finas, menos altura vertical por campo
-- [ ] Visões refinadas: "Exibir" = só o mais usado (posição, tamanho, texto, cor, fundo); "Avançado" = tudo (inclui Ação, CSS livre, atributos)
+- [x] Campos compactos com label inline (uma linha por propriedade, não duas) — grids de 2–4 colunas continuam empilhados, igual ao Figma
+- [x] Títulos de seção discretos em caixa alta sobre divisória fina, espaçamento vertical reduzido no painel inteiro
+- [x] **Scrub numérico**: arrastar o prefixo de um campo (W, H, X, Y, Gap…) pra esquerda/direita diminui/aumenta o valor — Shift = ×10, Alt = ×0,1; arrasto sem movimento vira clique e foca o campo pra digitar
+- [x] Visões refinadas: "Exibir" = só o mais usado (posição, tamanho, texto, cor, fundo); "Avançado" = tudo (inclui Ação, CSS livre, atributos)
 
 **Lote 3 · Fundo com gradiente (Fill estilo Figma)**
 - [ ] Preenchimento com Sólido / Gradiente linear / Gradiente radial — editor de paradas de cor + ângulo, gerando `linear-gradient()` / `radial-gradient()` de verdade no CSS

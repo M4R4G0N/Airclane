@@ -567,3 +567,57 @@
   }
 
 
+
+  /* ---------- Fase 15 · Lote 2: compact Figma-style properties panel ---------- */
+
+  /* one line per property: quiet inline label on the left, control filling
+     the rest — instead of the old label-above-input stack that made every
+     field two lines tall. */
+  #propsPanel .field{display:flex; align-items:center; gap:6px; margin-bottom:5px; flex-wrap:wrap;}
+  #propsPanel .field > label{
+    flex:0 0 72px; margin-bottom:0; font-size:10px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  #propsPanel .field > input,
+  #propsPanel .field > select,
+  #propsPanel .field > .iconField,
+  #propsPanel .field > .fieldRow,
+  #propsPanel .field > .colorSwatchBtn{flex:1; min-width:0;}
+  /* plain <div> values (e.g. the read-only "Elemento" row) act as the value */
+  #propsPanel .field > div{flex:1; min-width:0;}
+  /* help text wraps to its own full-width line under the control */
+  #propsPanel .field > .fieldHint{flex:1 1 100%; color:var(--text-dim); font-size:11px; margin-top:2px;}
+  /* textareas and custom stacked rows keep their label on top */
+  #propsPanel .field:has(> textarea){flex-direction:column; align-items:stretch;}
+  #propsPanel .field:has(> textarea) > label{flex:none;}
+  #propsPanel .checkField > label{flex:none;}
+  /* grid cells (2/3/4-up) stay stacked — a side-by-side label+control pair
+     is too cramped at half a panel's width, and Figma stacks these too */
+  #propsPanel .row2 > .field,
+  #propsPanel .row3 > .field,
+  #propsPanel .row4 > .field{flex-direction:column; align-items:stretch; gap:3px;}
+  #propsPanel .row2 > .field > label,
+  #propsPanel .row3 > .field > label,
+  #propsPanel .row4 > .field > label{flex:none;}
+
+  /* Figma-style section headers: quiet uppercase label over a hairline,
+     instead of a big bold title with empty space around it. */
+  #propsPanel .propsSection{
+    font-size:10px; text-transform:uppercase; letter-spacing:.08em; font-weight:700;
+    color:var(--text-dim); margin:0; padding:9px 0 6px;
+    border-top:1px solid var(--border);
+  }
+  #propsPanel .propsSection:first-child{border-top:none; padding-top:2px;}
+  #propsPanel .propsSectionBody{padding-bottom:5px;}
+  #propsPanel hr{border:none; border-top:1px solid var(--border); margin:6px 0;}
+
+  /* tighter grids and controls so more of the panel fits without scrolling */
+  #propsPanel .row2, #propsPanel .row3, #propsPanel .row4{gap:5px; margin-bottom:5px;}
+  #propsPanel input[type="text"],
+  #propsPanel input[type="number"],
+  #propsPanel select,
+  #propsPanel textarea{padding:4px 7px; font-size:12px; border-radius:6px;}
+  #propsPanel .iconFieldPrefix{min-width:18px; padding:0 5px; font-size:9px; cursor:ew-resize;}
+
+  /* checkbox rows already lay out horizontally — just stop them stretching */
+  #propsPanel .checkField{margin-bottom:5px;}
