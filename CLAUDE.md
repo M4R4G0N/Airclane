@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Arclane is an offline HTML artifact editor: open an `.html` file, edit it visually on a canvas with multiple artboards, edit its real CSS/JS, and save/export back to disk. It runs entirely in the browser — no build step, no framework, no backend, no dependencies.
 
-The project is only three real files:
+The project has no build step — all logic used to live in a single `app.js` (~5,700 lines, one IIFE). It has since been split into 25 plain `<script>` files under `js/` (see Architecture below), but the runtime model is unchanged: `index.html` loads them in dependency order and, because none of them wraps itself in its own function/IIFE, their top-level `const`/`let`/`function` declarations all share one global script scope — exactly as if it were still one file. Zero dependencies either way.
 
-| File | Purpose |
+| File / dir | Purpose |
 |---|---|
-| `index.html` | Editor UI structure (toolbar, side panels, canvas, modals) |
+| `index.html` | Editor UI structure (toolbar, side panels, canvas, modals) + the ordered `<script src="js/...">` list |
 | `style.css` | Editor UI styling (dark/light theme via CSS vars, panels, overlays) |
-| `app.js` | All application logic (~5,700 lines, single IIFE, zero dependencies) |
+| `js/*.js` | All application logic, split by concern (see Architecture) |
 
 Each artboard is a user-imported/created HTML document rendered inside a sandboxed `<iframe>`, with an edit overlay drawn on top for selecting/moving/resizing elements. Edits sync bidirectionally between the visual canvas and the artboard's underlying HTML/CSS/JS.
 
@@ -39,22 +39,26 @@ Manual test loop after any change:
 4. Toggle Edit mode vs. Visualizar (preview/run) mode.
 5. Test any "no-code" action (navigate to artboard, toggle element, set text, call JS function), then export the `.html` and open it standalone to confirm exported behavior still works.
 
-## Architecture (`app.js`)
+## Architecture (`js/`)
 
-Single IIFE (`(function(){ "use strict"; ... })();`), organized into sections marked by `// ---------- <name> ----------` comments. Grep for these to navigate — key ones, in file order:
+Each file in `js/` is a plain `<script src="...">` — **not** individually wrapped in an IIFE — loaded by `index.html` in the exact order listed below. That order is load-bearing: a later file's top-level code can reference an earlier file's `const`/`let`/`function`, but not the reverse, because they all share one global script-scope lexical environment (this is standard browser behavior for classic, non-module scripts — no bundler needed). If you add a new file, add its `<script>` tag in `index.html` in the right dependency position, not just at the end.
 
-- **Artboard model** (`createArtboard`) — each artboard is an iframe + overlay + title bar, with its own size/position on a free-roaming 6000×4000px pan/zoom canvas, and its own undo history.
-- **Document load / history**, **code panel sync** — canvas ↔ code bidirectional sync; applying code reconstructs the artboard iframe.
-- **Selection & overlay**, **align/distribute**, **drag to move/reorder**, **snap guides**, **resize** — the direct-manipulation editing core; supports multi-select.
-- **Layers panel** — tree view of the real DOM of the active artboard; drag to reorder/nest.
-- **Properties panel: element / artboard** — two views ("Exibir" = essentials, "Avançado" = everything), collapsible sections (Layout, Cor, Padding, Margin, Borda, Cantos, Aparência…), linked padding/margin/corner fields, custom color picker (saturation/value + hue + alpha + hex/rgba + eyedropper).
-- **Ações sem código** — four no-code action types (navigate to artboard, show/hide element, set element text, call a JS function), triggered on click/hover/hoverout/load.
-- **FASE 08: Editor de CSS Estruturado** — structured CSS class editor + cross-project class library + global CSS variables, separate from the properties panel.
-- **FASE 10: Barra de fórmulas** — a Power-Apps-style formula bar: named elements become variables backed by a `Proxy` (`hide()`/`show()`/`toggle()`/`text`/`html`/`value`, else falls through to the real DOM element). Behavioral formulas persist in an inert `<script type="text/x-ae-formula">` tag and are replayed in exported HTML; mutation formulas serialize directly into the HTML.
-- **Gráfico (canvas)** — chart element (bar/line/pie) drawn on native 2D canvas; only the config (`data-ae-chart`) is persisted, pixels are redrawn on every load.
-- **Group/ungroup, duplicate/delete, clipboard, keyboard shortcuts, context menu, modal** (replaces `alert`/`confirm`/`prompt`).
-- **Projects (.json on disk)** — a project file is `{ type: "artifact-editor-project", version: 1, artboards: [...] }`; "Recentes" uses `localStorage` for thumbnails only.
-- **Init** — entry point at the bottom of the file.
+In file (= load) order:
+
+- **`core-state.js`** — shared constants (`DEFAULT_DOC`) and top-level DOM refs/state (`artboards`, counters) every other file reads/mutates.
+- **`artboard.js`** (`createArtboard`) — each artboard is an iframe + overlay + title bar, with its own size/position on a free-roaming 6000×4000px pan/zoom canvas, and its own undo history.
+- **`history.js`** — document load/history + code panel sync; canvas ↔ code bidirectional sync; applying code reconstructs the artboard iframe.
+- **`selection-overlay.js`**, **`snap-resize.js`**, **`canvas-listeners.js`** — the direct-manipulation editing core: selection & overlay, align/distribute, drag to move/reorder, snap guides, resize, iframe-internal listeners. Supports multi-select.
+- **`layers-panel.js`** — tree view of the real DOM of the active artboard; drag to reorder/nest.
+- **`properties-artboard.js`**, **`actions-no-code.js`**, **`element-attributes.js`**, **`properties-element.js`**, **`color-picker.js`**, **`text-toolbar.js`** — the properties panel (element/artboard, two views: "Exibir" = essentials, "Avançado" = everything), collapsible sections (Layout, Cor, Padding, Margin, Borda, Cantos, Aparência…), linked padding/margin/corner fields, custom color picker (saturation/value + hue + alpha + hex/rgba + eyedropper), and the four no-code action types (navigate to artboard, show/hide element, set element text, call a JS function) triggered on click/hover/hoverout/load.
+- **`elements-chart.js`** — add-element menu + chart element (bar/line/pie) drawn on native 2D canvas; only the config (`data-ae-chart`) is persisted, pixels are redrawn on every load.
+- **`icon-catalog.js`** — small built-in icon set.
+- **`group-clipboard.js`**, **`clipboard-shortcuts.js`**, **`context-menu.js`** — group/ungroup, duplicate/delete, clipboard, keyboard shortcuts, context menu, modal (replaces `alert`/`confirm`/`prompt`).
+- **`projects.js`**, **`recent-projects.js`** — project files on disk (`{ type: "artifact-editor-project", version: 1, artboards: [...] }`); "Recentes" uses `localStorage` for thumbnails only.
+- **`toolbar-wiring.js`**, **`side-panels.js`** — main toolbar wiring; side-panel collapse/drag-to-resize.
+- **`css-class-editor.js`** (FASE 08) — structured CSS class editor + cross-project class library + global CSS variables, separate from the properties panel.
+- **`formula-bar.js`** (FASE 10) — Power-Apps-style formula bar: named elements become variables backed by a `Proxy` (`hide()`/`show()`/`toggle()`/`text`/`html`/`value`, else falls through to the real DOM element). Behavioral formulas persist in an inert `<script type="text/x-ae-formula">` tag and are replayed in exported HTML; mutation formulas serialize directly into the HTML.
+- **`init.js`** — entry point, runs last.
 
 ### `data-ae-*` internal metadata attributes
 
@@ -80,6 +84,10 @@ Exports (full `.html`, HTML+external CSS, CSS-only, PNG, SVG) go through a clean
 
 - **No external dependencies, no build tooling.** The project is intentionally zero-dependency — do not add any.
 - Existing code style: hybrid ES5/ES6 — `const`/`let` are used, but functions are mostly `function` declarations, not arrow functions; everything lives inside the one IIFE; no classes, state lives in plain objects (`state`, `artboards`) with closures; nested callbacks over promises (async is rare); comments are extensive and in Portuguese, explaining architecture decisions and past bugs. Match this style in the existing surrounding code rather than mixing conventions.
+
+### Working style for large modifications
+
+When a requested change is large, the first question is whether it can be broken into independent parts — and if so, do it that way by default. Don't spend a long stretch silently reading/planning the whole thing before touching anything: work in small visible increments, one part at a time — read/identify a part, act on it, report what was done ("fiz X"), move to the next part. Long silent up-front analysis on a big task burns time and tokens without adding value; the user would rather see fast incremental progress they can redirect early than one big careful pass planned end-to-end before any action. This does not apply to genuinely ambiguous design decisions — those still deserve real thought before acting.
 
 ### Checklist for any change to this project
 - Keep the existing code pattern: IIFE, `function` declarations, comments in Portuguese (for code that follows the existing style).
