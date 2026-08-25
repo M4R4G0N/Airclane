@@ -1,7 +1,11 @@
 (function(){
 "use strict";
 
-const DEFAULT_DOC = '<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="UTF-8">\n<style>\n  body{ margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:#ffffff; }\n</style>\n</head>\n<body>\n\n<div style="display:inline-block; padding:20px; background:#35d0a4; color:#06231b; border-radius:12px; font-size:20px; font-weight:700;">Novo artboard</div>\n\n</body>\n</html>\n';
+// baseline reset every new artboard starts with — box-sizing:border-box so
+// padding doesn't blow up a width/height you just set, and html/body at
+// height:100% so a child can actually do height:100%/flex fill instead of
+// collapsing to 0 (percentage heights need a sized ancestor chain).
+const DEFAULT_DOC = '<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="UTF-8">\n<style>\n  *{ box-sizing:border-box; }\n  html, body{ height:100%; }\n  body{ margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:#ffffff; }\n</style>\n</head>\n<body>\n\n<div style="display:inline-block; padding:20px; background:#35d0a4; color:#06231b; border-radius:12px; font-size:20px; font-weight:700;">Novo artboard</div>\n\n</body>\n</html>\n';
 
 const artboardsRow = document.getElementById('artboardsRow');
 const canvasWrap = document.getElementById('canvasWrap');
@@ -21,8 +25,41 @@ const state = {
   selected: null,     // selected element inside the active artboard
   artboardMode: false, // true when the *artboard itself* (not an element) is selected
   currentProject: null,
-  rulePickedClass: null // which of the selected element's classes the CSS-rule editor is showing
+  rulePickedClass: null, // which of the selected element's classes the CSS-rule editor is showing
+  multiSelect: new Set(), // secondary elements selected with Ctrl/Cmd+click, for align/distribute/bulk delete
+  layersFilter: '',
+  stylePainter: { active: false, props: null } // "copiar estilo" tool: pick a source, then apply to targets
 };
+
+// state.selected plus everything in state.multiSelect, as an array.
+function effectiveSelection(){
+  const set = new Set(state.multiSelect);
+  if(state.selected) set.add(state.selected);
+  return Array.from(set);
+}
+
+// Ctrl/Cmd+click toggles an element's membership in the multi-selection,
+// without touching the primary state.selected (used for the properties
+// panel) or starting any drag.
+function toggleMultiSelect(el){
+  if(!state.selected){ selectElement(el); return; }
+  if(el === state.selected){
+    if(state.multiSelect.size){
+      const arr = Array.from(state.multiSelect);
+      const next = arr.pop();
+      state.multiSelect = new Set(arr);
+      state.selected = next;
+    } else {
+      state.selected = null;
+    }
+  } else if(state.multiSelect.has(el)){
+    state.multiSelect.delete(el);
+  } else {
+    state.multiSelect.add(el);
+  }
+  state.artboardMode = false;
+  renderOverlay(); renderProps(); highlightLayerRow();
+}
 
 // ---------- artboard model ----------
 
@@ -60,6 +97,9 @@ function createArtboard(opts){
   frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-modals');
   frame.style.width = w + 'px';
   frame.style.height = h + 'px';
+  // avoid the white flash of a half-parsed document: stay hidden until the
+  // new srcdoc is fully loaded and styled, then reveal it in one frame.
+  frame.addEventListener('load', function(){ frame.style.opacity = '1'; });
   const catcher = document.createElement('div');
   catcher.className = 'dragCatcher';
   const overlay = document.createElement('div');
@@ -83,21 +123,34 @@ function createArtboard(opts){
 
   let dragMoved = false;
   titleWrap.addEventListener('mousedown', function(e){
+    if(e.button !== 0) return;
     e.stopPropagation();
     setActiveArtboard(ab.id);
     const scale = state.zoom;
     const startX = e.clientX, startY = e.clientY;
     const origX = ab.x, origY = ab.y;
     dragMoved = false;
+    let snapTargets = null, guides = null;
     function onMove(ev){
       const dx = (ev.clientX - startX) / scale, dy = (ev.clientY - startY) / scale;
       if(Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
-      ab.x = Math.max(0, origX + dx); ab.y = Math.max(0, origY + dy);
+      if(dragMoved && !guides){
+        snapTargets = artboards.filter(function(a){ return a.id !== ab.id; }).map(function(a){ return { left: a.x, top: a.y, width: a.w, height: a.h }; });
+        guides = makeCanvasSnapGuides();
+      }
+      let x = Math.max(0, origX + dx), y = Math.max(0, origY + dy);
+      if(guides){
+        const snapped = computeSnap(x, y, ab.w, ab.h, snapTargets);
+        x = Math.max(0, snapped.left); y = Math.max(0, snapped.top);
+        guides.update(snapped.guideX, snapped.guideY);
+      }
+      ab.x = x; ab.y = y;
       wrap.style.left = ab.x + 'px'; wrap.style.top = ab.y + 'px';
     }
     function onUp(){
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      if(guides) guides.remove();
       if(dragMoved) repositionAddTile();
     }
     window.addEventListener('mousemove', onMove);
@@ -182,6 +235,20 @@ function selectArtboardOnly(id){
   highlightLayerRow();
 }
 
+// clicking a "Navegar para artboard" link in Visualizar mode lands here —
+// scrolls that artboard into view and selects it, so testing a click-through
+// flow (login -> register, etc.) actually goes somewhere instead of the
+// href="#ae-goto:..." doing nothing.
+function goToArtboard(id){
+  const ab = artboards.find(function(a){ return a.id === id; });
+  if(!ab){
+    showAlert('Esse link aponta pra um artboard que não existe mais. Talvez ele tenha sido movido, editado ou excluído.', 'Página não encontrada');
+    return;
+  }
+  ab.dom.wrap.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+  selectArtboardOnly(id);
+}
+
 function setArtboardSize(ab, w, h){
   ab.w = w; ab.h = h;
   ab.dom.frame.style.width = w + 'px';
@@ -238,6 +305,7 @@ function duplicateArtboard(ab){
 // ---------- document load / history (per artboard) ----------
 
 function loadDocumentInto(ab, html, pushHist){
+  ab.dom.frame.style.opacity = '0';
   ab.dom.frame.setAttribute('srcdoc', html);
   ab.dom.frame.onload = function(){
     attachCanvasListeners(ab);
@@ -271,6 +339,14 @@ function cleanExportHTML(ab){
   if(!doc) return DEFAULT_DOC;
   const clone = doc.documentElement.cloneNode(true);
   clone.querySelectorAll('[data-ae-name]').forEach(function(n){ n.removeAttribute('data-ae-name'); });
+  clone.querySelectorAll('[data-ae-locked]').forEach(function(n){ n.removeAttribute('data-ae-locked'); });
+  clone.querySelectorAll('[data-ae-group]').forEach(function(n){ n.removeAttribute('data-ae-group'); });
+  clone.querySelectorAll('[data-ae-goto]').forEach(function(n){ n.removeAttribute('data-ae-goto'); });
+  // internal bookkeeping only (round-trips artboard size through the
+  // editor's own re-import) — not something someone opening the shipped
+  // file should see in their <head>.
+  const sizeMeta = clone.querySelector('meta[name="ae-artboard-size"]');
+  if(sizeMeta) sizeMeta.remove();
   return '<!doctype html>\n' + clone.outerHTML;
 }
 
@@ -335,6 +411,7 @@ function isEditableEl(el, doc){
 
 function selectElement(el){
   state.selected = el;
+  state.multiSelect = new Set();
   state.artboardMode = false;
   artboards.forEach(function(a){ a.dom.wrap.classList.remove('selected'); });
   renderOverlay();
@@ -382,9 +459,21 @@ function renderOverlay(){
     return;
   }
 
-  const el = state.selected;
   const doc = getDoc();
-  if(!el || !doc) return;
+  if(!doc) return;
+
+  state.multiSelect.forEach(function(sec){
+    if(!sec.isConnected) return;
+    const sr = elRectToStage(sec);
+    const sbox = document.createElement('div');
+    sbox.className = 'sel-box multi';
+    sbox.style.left = sr.left + 'px'; sbox.style.top = sr.top + 'px';
+    sbox.style.width = sr.width + 'px'; sbox.style.height = sr.height + 'px';
+    overlay.appendChild(sbox);
+  });
+
+  const el = state.selected;
+  if(!el) return;
   const r = elRectToStage(el);
   const box = document.createElement('div');
   box.className = 'sel-box';
@@ -469,6 +558,108 @@ function ensureAbsolute(el){
   el.style.margin = '0';
 }
 
+// ---------- align / distribute (multi-selection) ----------
+// Only makes real sense for freeform elements — flow elements don't have
+// an explicit x/y to align, so each target gets converted to absolute
+// first (same as dragging one does), preserving its current position.
+
+function alignSelection(mode){
+  const items = effectiveSelection();
+  if(items.length < 2) return;
+  const doc = getDoc();
+  const rects = items.map(function(el){ return { el: el, r: elRectToStage(el) }; });
+  let target;
+  if(mode === 'left') target = Math.min.apply(null, rects.map(function(i){ return i.r.left; }));
+  else if(mode === 'right') target = Math.max.apply(null, rects.map(function(i){ return i.r.left + i.r.width; }));
+  else if(mode === 'hcenter') target = (Math.min.apply(null, rects.map(function(i){ return i.r.left; })) + Math.max.apply(null, rects.map(function(i){ return i.r.left + i.r.width; }))) / 2;
+  else if(mode === 'top') target = Math.min.apply(null, rects.map(function(i){ return i.r.top; }));
+  else if(mode === 'bottom') target = Math.max.apply(null, rects.map(function(i){ return i.r.top + i.r.height; }));
+  else if(mode === 'vcenter') target = (Math.min.apply(null, rects.map(function(i){ return i.r.top; })) + Math.max.apply(null, rects.map(function(i){ return i.r.top + i.r.height; }))) / 2;
+
+  rects.forEach(function(item){
+    ensureAbsolute(item.el);
+    const r2 = elRectToStage(item.el);
+    const parent = item.el.offsetParent || doc.body;
+    const pRect = elRectToStage(parent);
+    if(mode === 'left') item.el.style.left = (target - pRect.left) + 'px';
+    else if(mode === 'right') item.el.style.left = (target - r2.width - pRect.left) + 'px';
+    else if(mode === 'hcenter') item.el.style.left = (target - r2.width / 2 - pRect.left) + 'px';
+    else if(mode === 'top') item.el.style.top = (target - pRect.top) + 'px';
+    else if(mode === 'bottom') item.el.style.top = (target - r2.height - pRect.top) + 'px';
+    else if(mode === 'vcenter') item.el.style.top = (target - r2.height / 2 - pRect.top) + 'px';
+  });
+  pushHistory(); syncCodeFromCanvas(); renderOverlay();
+}
+
+function distributeSelection(axis){
+  const items = effectiveSelection();
+  if(items.length < 3) return;
+  const doc = getDoc();
+  const key = axis === 'h' ? 'left' : 'top';
+  const size = axis === 'h' ? 'width' : 'height';
+  const rects = items.map(function(el){ return { el: el, r: elRectToStage(el) }; }).sort(function(a, b){ return a.r[key] - b.r[key]; });
+  const first = rects[0], last = rects[rects.length - 1];
+  const totalSpan = (last.r[key] + last.r[size]) - first.r[key];
+  const totalSize = rects.reduce(function(s, i){ return s + i.r[size]; }, 0);
+  const gap = (totalSpan - totalSize) / (rects.length - 1);
+  let cursor = first.r[key] + first.r[size] + gap;
+  rects.forEach(function(item, idx){
+    if(idx === 0 || idx === rects.length - 1) return;
+    ensureAbsolute(item.el);
+    const parent = item.el.offsetParent || doc.body;
+    const pRect = elRectToStage(parent);
+    if(axis === 'h') item.el.style.left = (cursor - pRect.left) + 'px';
+    else item.el.style.top = (cursor - pRect.top) + 'px';
+    cursor += item.r[size] + gap;
+  });
+  pushHistory(); syncCodeFromCanvas(); renderOverlay();
+}
+
+// ---------- style painter ("copiar estilo" / eyedropper) ----------
+// Click a source element to copy its look (not layout/position), then
+// click any number of other elements to paste it onto them — a classic
+// two-click format painter, armed from the toolbar until toggled off.
+
+const STYLE_PAINT_PROPS = [
+  'backgroundColor', 'backgroundImage', 'backgroundSize', 'color', 'fontSize', 'fontWeight',
+  'fontFamily', 'fontStyle', 'textDecoration', 'letterSpacing', 'lineHeight',
+  'borderRadius', 'borderWidth', 'borderStyle', 'borderColor', 'boxShadow', 'opacity'
+];
+
+// Off switch only — turning it *on* happens in the toolbar button handler,
+// since it needs to capture from whatever is already selected at that
+// moment (select the source normally, then press the button, then click
+// the targets — not a separate "click to pick" step).
+function setStylePainterActive(active){
+  state.stylePainter.active = active;
+  if(!active) state.stylePainter.props = null;
+  document.getElementById('btnStylePainter').classList.toggle('active', active);
+  document.getElementById('btnStylePainter').textContent = active ? 'Clique pra aplicar (Esc pra sair)' : 'Copiar estilo';
+}
+
+// flashes a colored outline on el for a moment — visual confirmation on
+// the canvas itself, since capturing has no other visible effect.
+function flashPicked(el){
+  const prevOutline = el.style.outline, prevOffset = el.style.outlineOffset;
+  el.style.outline = '3px solid #ff3d7f';
+  el.style.outlineOffset = '2px';
+  setTimeout(function(){
+    el.style.outline = prevOutline;
+    el.style.outlineOffset = prevOffset;
+  }, 550);
+}
+
+function useStylePainter(el){
+  const props = state.stylePainter.props;
+  if(!props) return;
+  Object.keys(props).forEach(function(p){ el.style[p] = props[p]; });
+  pushHistory(); syncCodeFromCanvas();
+  selectElement(el);
+}
+
+function bringToFront(el){ el.parentNode.appendChild(el); pushHistory(); syncCodeFromCanvas(); renderLayers(); }
+function sendToBack(el){ el.parentNode.insertBefore(el, el.parentNode.firstChild); pushHistory(); syncCodeFromCanvas(); renderLayers(); }
+
 // re-parent el into newParent, keeping normal document flow (appended as
 // the last child) — dragging a layer into another one in the layers panel
 // just nests it, no absolute positioning involved.
@@ -484,12 +675,124 @@ const DRAG_THRESHOLD = 6; // px of real movement before a click becomes a drag
 function catchPointer(cursor){ const c = getCatcher(); if(c){ c.style.pointerEvents = 'auto'; c.style.cursor = cursor || 'move'; } }
 function releasePointer(){ const c = getCatcher(); if(c){ c.style.pointerEvents = 'none'; c.style.cursor = ''; } }
 
+// A real, physical click-and-hold that starts inside an iframe can end up
+// "captured" there by the browser for the rest of the gesture, even once
+// our drag catcher is covering it — mousemove/mouseup then never reach
+// `window` at all until release (sometimes not even then), which reads as
+// "nothing happens while held, then it drags on its own afterwards". So
+// every drag listens on both `window` and the iframe's own document, and
+// normalizes whichever one actually fires into parent-page coordinates.
+function bindDragListeners(doc, frame, scale, onMove, onUp){
+  function norm(ev){
+    if(ev.view && doc.defaultView && ev.view === doc.defaultView){
+      const r = frame.getBoundingClientRect();
+      return { clientX: r.left + ev.clientX * scale, clientY: r.top + ev.clientY * scale };
+    }
+    return { clientX: ev.clientX, clientY: ev.clientY };
+  }
+  function move(ev){ const p = norm(ev); onMove(p.clientX, p.clientY); }
+  function up(ev){ const p = norm(ev); unbind(); onUp(p.clientX, p.clientY); }
+  function unbind(){
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+    doc.removeEventListener('mousemove', move);
+    doc.removeEventListener('mouseup', up);
+  }
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+  doc.addEventListener('mousemove', move);
+  doc.addEventListener('mouseup', up);
+  return unbind;
+}
+
 function startDrag(e, el){
   if(isFreeform(el)) startFreeMove(e, el);
   else startReorder(e, el);
 }
 
 // absolute/fixed elements: drag moves them freely via left/top.
+// ---------- alignment / snap guides while dragging ----------
+
+const SNAP_THRESHOLD = 6;
+
+// rects (in stage space) of every other element in the artboard, plus the
+// artboard's own bounds — computed once when a drag starts, not per pixel.
+function collectSnapTargets(doc, el){
+  const out = [];
+  (function walk(node){
+    Array.from(node.children).forEach(function(c){
+      if(!isEditableEl(c, doc)) return;
+      if(c !== el && !c.contains(el) && !el.contains(c)) out.push(elRectToStage(c));
+      walk(c);
+    });
+  })(doc.body);
+  const ab = activeArtboard();
+  if(ab) out.push({ left: 0, top: 0, width: ab.w, height: ab.h });
+  return out;
+}
+
+// snaps left/top (of a w×h box) against the collected targets' edges and
+// centers; returns the (possibly adjusted) position plus where to draw
+// guide lines, or null on an axis with no snap.
+function computeSnap(left, top, w, h, targets){
+  let bestX = null, bestY = null;
+  const xs = [left, left + w / 2, left + w];
+  const ys = [top, top + h / 2, top + h];
+  targets.forEach(function(t){
+    [t.left, t.left + t.width / 2, t.left + t.width].forEach(function(tx){
+      xs.forEach(function(x){
+        const d = x - tx;
+        if(Math.abs(d) < SNAP_THRESHOLD && (!bestX || Math.abs(d) < Math.abs(bestX.d))) bestX = { d: d, pos: tx };
+      });
+    });
+    [t.top, t.top + t.height / 2, t.top + t.height].forEach(function(ty){
+      ys.forEach(function(y){
+        const d = y - ty;
+        if(Math.abs(d) < SNAP_THRESHOLD && (!bestY || Math.abs(d) < Math.abs(bestY.d))) bestY = { d: d, pos: ty };
+      });
+    });
+  });
+  return {
+    left: bestX ? left - bestX.d : left,
+    top: bestY ? top - bestY.d : top,
+    guideX: bestX ? bestX.pos : null,
+    guideY: bestY ? bestY.pos : null
+  };
+}
+
+function makeSnapGuides(overlay){
+  const gx = document.createElement('div'); gx.className = 'snapGuide v'; gx.style.display = 'none';
+  const gy = document.createElement('div'); gy.className = 'snapGuide h'; gy.style.display = 'none';
+  if(overlay){ overlay.appendChild(gx); overlay.appendChild(gy); }
+  return {
+    update: function(guideX, guideY, ab){
+      if(guideX != null && ab){ gx.style.display = 'block'; gx.style.left = guideX + 'px'; gx.style.top = '0px'; gx.style.height = ab.h + 'px'; }
+      else gx.style.display = 'none';
+      if(guideY != null && ab){ gy.style.display = 'block'; gy.style.top = guideY + 'px'; gy.style.left = '0px'; gy.style.width = ab.w + 'px'; }
+      else gy.style.display = 'none';
+    },
+    remove: function(){ gx.remove(); gy.remove(); }
+  };
+}
+
+// same idea as makeSnapGuides, but for dragging an artboard around the
+// canvas — lives in artboardsRow (canvas-space) instead of one artboard's
+// own overlay, since it needs to reach across every artboard.
+function makeCanvasSnapGuides(){
+  const gx = document.createElement('div'); gx.className = 'snapGuide v'; gx.style.display = 'none';
+  const gy = document.createElement('div'); gy.className = 'snapGuide h'; gy.style.display = 'none';
+  artboardsRow.appendChild(gx); artboardsRow.appendChild(gy);
+  return {
+    update: function(guideX, guideY){
+      if(guideX != null){ gx.style.display = 'block'; gx.style.left = guideX + 'px'; gx.style.top = '0px'; gx.style.height = '4000px'; }
+      else gx.style.display = 'none';
+      if(guideY != null){ gy.style.display = 'block'; gy.style.top = guideY + 'px'; gy.style.left = '0px'; gy.style.width = '6000px'; }
+      else gy.style.display = 'none';
+    },
+    remove: function(){ gx.remove(); gy.remove(); }
+  };
+}
+
 function startFreeMove(e, el){
   e.preventDefault();
   const doc = getDoc();
@@ -502,78 +805,148 @@ function startFreeMove(e, el){
   const bounds = el.offsetParent || doc.body;
   const maxLeft = Math.max(0, bounds.clientWidth - el.offsetWidth);
   const maxTop = Math.max(0, bounds.clientHeight - el.offsetHeight);
+  const w = el.offsetWidth, h = el.offsetHeight;
   let started = false;
+  let snapTargets = null;
+  let guides = null;
   catchPointer('move');
 
-  function onMove(ev){
-    const dx = (ev.clientX - startXParent) / scale, dy = (ev.clientY - startYParent) / scale;
+  function onMove(clientX, clientY){
+    const dx = (clientX - startXParent) / scale, dy = (clientY - startYParent) / scale;
     if(!started){
       if(Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
       started = true;
+      snapTargets = collectSnapTargets(doc, el);
+      guides = makeSnapGuides(getOverlay());
     }
-    el.style.left = Math.min(Math.max(0, origLeft + dx), maxLeft) + 'px';
-    el.style.top = Math.min(Math.max(0, origTop + dy), maxTop) + 'px';
+    let left = Math.min(Math.max(0, origLeft + dx), maxLeft);
+    let top = Math.min(Math.max(0, origTop + dy), maxTop);
+    const snapped = computeSnap(left, top, w, h, snapTargets);
+    left = Math.min(Math.max(0, snapped.left), maxLeft);
+    top = Math.min(Math.max(0, snapped.top), maxTop);
+    guides.update(snapped.guideX, snapped.guideY, activeArtboard());
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
     updateOverlayLive();
   }
   function onUp(){
-    window.removeEventListener('mousemove', onMove);
-    window.removeEventListener('mouseup', onUp);
     releasePointer();
+    if(guides) guides.remove();
     if(started){ pushHistory(); syncCodeFromCanvas(); }
   }
-  window.addEventListener('mousemove', onMove);
-  window.addEventListener('mouseup', onUp);
+  bindDragListeners(doc, frame, scale, onMove, onUp);
 }
 
 // elements in normal flow: drag reorders el among its siblings instead of
 // moving it freely — no position:absolute involved.
+// tags that can never receive children — dropping "into" one of these
+// always means reordering next to it instead of nesting inside it.
+const VOID_TAGS = { IMG: 1, INPUT: 1, BR: 1, HR: 1, TEXTAREA: 1 };
+
 function startReorder(e, el){
   e.preventDefault();
   const doc = getDoc();
   const frame = getFrame();
-  const parent = el.parentElement;
+  const overlay = getOverlay();
   const scale = state.zoom;
   let started = false;
   let prevOpacity;
+  let pending = null; // { type:'nest'|'before'|'after', target }
   catchPointer('grabbing');
 
+  // A ghost follows the cursor (fixed position, parent document — no
+  // iframe/scale math needed) so you can see where you're about to drop
+  // it; the real element doesn't move (and nothing reflows) until you
+  // release. A highlight on the artboard shows the exact target: a
+  // dashed box to nest inside, or a thin line to land next to.
+  const ghost = document.createElement('div');
+  ghost.className = 'dragGhost';
+  ghost.textContent = shortLabel(el);
+  document.body.appendChild(ghost);
+
+  const hilite = document.createElement('div');
+  hilite.className = 'dropHilite';
+  if(overlay) overlay.appendChild(hilite);
+
+  function showGhost(clientX, clientY){
+    const r = el.getBoundingClientRect();
+    ghost.style.width = Math.max(40, r.width * scale) + 'px';
+    ghost.style.height = Math.max(22, r.height * scale) + 'px';
+    ghost.style.left = (clientX + 14) + 'px';
+    ghost.style.top = (clientY + 14) + 'px';
+    ghost.classList.add('show');
+  }
+
+  // Follows the cursor anywhere in the document (not just el's original
+  // siblings): hovering the middle of another element nests el inside it;
+  // hovering its top/bottom (or left/right, in a row) edge queues el as
+  // a sibling next to it instead. Hierarchy follows what's visually under
+  // the cursor, same as dragging a layer onto another in the layers panel.
+  // Nothing moves for real yet — this only records the pending drop.
   function pick(clientX, clientY){
     const iframeRect = frame.getBoundingClientRect();
     const ix = (clientX - iframeRect.left) / scale;
     const iy = (clientY - iframeRect.top) / scale;
-    let target = doc.elementFromPoint(ix, iy);
-    while(target && target.parentElement !== parent && target !== parent) target = target.parentElement;
-    if(!target || target === parent || target === el || !isEditableEl(target, doc)) return;
-    const r = target.getBoundingClientRect();
-    const pcs = doc.defaultView.getComputedStyle(parent);
+    let hit = doc.elementFromPoint(ix, iy);
+    while(hit && !isEditableEl(hit, doc) && hit !== doc.body) hit = hit.parentElement;
+    if(!hit || hit === el || el.contains(hit) || !isEditableEl(hit, doc)){ pending = null; hilite.style.display = 'none'; return; }
+
+    const r = hit.getBoundingClientRect();
+    const parentOfHit = hit.parentElement;
+    const pcs = doc.defaultView.getComputedStyle(parentOfHit);
     const isRow = (pcs.display === 'flex' || pcs.display === 'inline-flex') && (pcs.flexDirection || 'row').indexOf('row') === 0;
-    const before = isRow ? (ix < r.left + r.width / 2) : (iy < r.top + r.height / 2);
-    parent.insertBefore(el, before ? target : target.nextSibling);
+    const edge = isRow ? (r.width ? (ix - r.left) / r.width : .5) : (r.height ? (iy - r.top) / r.height : .5);
+    const canNest = !VOID_TAGS[hit.tagName];
+    const stageR = elRectToStage(hit);
+
+    hilite.style.display = 'block';
+    if(canNest && edge > 0.25 && edge < 0.75){
+      pending = { type: 'nest', target: hit };
+      hilite.className = 'dropHilite nest';
+      hilite.style.left = stageR.left + 'px'; hilite.style.top = stageR.top + 'px';
+      hilite.style.width = stageR.width + 'px'; hilite.style.height = stageR.height + 'px';
+    } else {
+      const before = edge <= 0.25;
+      pending = { type: before ? 'before' : 'after', target: hit };
+      hilite.className = 'dropHilite line';
+      if(isRow){
+        hilite.style.top = stageR.top + 'px'; hilite.style.height = stageR.height + 'px'; hilite.style.width = '3px';
+        hilite.style.left = (before ? stageR.left - 1 : stageR.left + stageR.width - 1) + 'px';
+      } else {
+        hilite.style.left = stageR.left + 'px'; hilite.style.width = stageR.width + 'px'; hilite.style.height = '3px';
+        hilite.style.top = (before ? stageR.top - 1 : stageR.top + stageR.height - 1) + 'px';
+      }
+    }
   }
 
-  function onMove(ev){
+  const iframeRect0 = frame.getBoundingClientRect();
+  const startXParent = iframeRect0.left + e.clientX * scale, startYParent = iframeRect0.top + e.clientY * scale;
+
+  function onMove(clientX, clientY){
     if(!started){
-      const iframeRect = frame.getBoundingClientRect();
-      const sx = iframeRect.left + e.clientX * scale, sy = iframeRect.top + e.clientY * scale;
-      if(Math.abs(ev.clientX - sx) < DRAG_THRESHOLD && Math.abs(ev.clientY - sy) < DRAG_THRESHOLD) return;
+      if(Math.abs(clientX - startXParent) < DRAG_THRESHOLD && Math.abs(clientY - startYParent) < DRAG_THRESHOLD) return;
       started = true;
       prevOpacity = el.style.opacity;
-      el.style.opacity = '0.5';
+      el.style.opacity = '0.35';
     }
-    pick(ev.clientX, ev.clientY);
-    updateOverlayLive();
+    showGhost(clientX, clientY);
+    pick(clientX, clientY);
   }
   function onUp(){
-    window.removeEventListener('mousemove', onMove);
-    window.removeEventListener('mouseup', onUp);
     releasePointer();
+    ghost.remove();
+    hilite.remove();
     if(started){
       el.style.opacity = prevOpacity;
-      pushHistory(); syncCodeFromCanvas(); renderLayers(); highlightLayerRow();
+      if(pending){
+        if(pending.type === 'nest') pending.target.appendChild(el);
+        else if(pending.type === 'before') pending.target.parentElement.insertBefore(el, pending.target);
+        else pending.target.parentElement.insertBefore(el, pending.target.nextSibling);
+      }
+      pushHistory(); syncCodeFromCanvas(); renderLayers(); highlightLayerRow(); renderOverlay();
     }
   }
-  window.addEventListener('mousemove', onMove);
-  window.addEventListener('mouseup', onUp);
+  bindDragListeners(doc, frame, scale, onMove, onUp);
 }
 
 // ---------- artboard resize (handles on the artboard itself) ----------
@@ -621,13 +994,29 @@ function startResize(e, handle){
   const origTop = free ? (parseFloat(el.style.top) || 0) : 0;
   const origW = parseFloat(el.style.width) || el.offsetWidth, origH = parseFloat(el.style.height) || el.offsetHeight;
 
+  const isCorner = handle.length === 2;
+
   function onMove(ev){
     const dx = (ev.clientX - startX) / scale, dy = (ev.clientY - startY) / scale;
     let left = origLeft, top = origTop, w = origW, h = origH;
-    if(handle.includes('e')) w = Math.max(4, origW + dx);
-    if(handle.includes('s')) h = Math.max(4, origH + dy);
-    if(free && handle.includes('w')){ w = Math.max(4, origW - dx); left = origLeft + dx; }
-    if(free && handle.includes('n')){ h = Math.max(4, origH - dy); top = origTop + dy; }
+    if(isCorner && ev.shiftKey){
+      // proportional: whichever axis moved more (relative to the shape's
+      // own size) drives the scale, the other axis follows to keep ratio.
+      const dwSigned = handle.includes('e') ? dx : -dx;
+      const dhSigned = handle.includes('s') ? dy : -dy;
+      const scaleFactor = Math.abs(dwSigned) / origW > Math.abs(dhSigned) / origH
+        ? (origW + dwSigned) / origW
+        : (origH + dhSigned) / origH;
+      w = Math.max(4, origW * scaleFactor);
+      h = Math.max(4, origH * scaleFactor);
+      if(free && handle.includes('w')) left = origLeft + (origW - w);
+      if(free && handle.includes('n')) top = origTop + (origH - h);
+    } else {
+      if(handle.includes('e')) w = Math.max(4, origW + dx);
+      if(handle.includes('s')) h = Math.max(4, origH + dy);
+      if(free && handle.includes('w')){ w = Math.max(4, origW - dx); left = origLeft + dx; }
+      if(free && handle.includes('n')){ h = Math.max(4, origH - dy); top = origTop + dy; }
+    }
     if(free){
       left = Math.max(0, left);
       top = Math.max(0, top);
@@ -661,22 +1050,52 @@ function attachCanvasListeners(ab){
   doc.addEventListener('mousedown', function(e){
     setActiveArtboard(ab.id);
     if(!state.editMode) return;
+    // right (and middle) click reach here too — without this guard, a
+    // right-click was running the same selectElement()/startDrag() as a
+    // real click, collapsing multi-selection and arming a drag before the
+    // 'contextmenu' handler even runs, no matter what that handler does.
+    if(e.button !== 0) return;
     let target = e.target;
-    if(!isEditableEl(target, doc)){ selectArtboardOnly(ab.id); return; }
+    if(!isEditableEl(target, doc)){ if(!e.ctrlKey && !e.metaKey) selectArtboardOnly(ab.id); return; }
+    if(target.closest('[data-ae-locked="1"]')) return;
+    // already mid-edit (double-click turned this on) — let the click place
+    // the caret/selection natively instead of hijacking it into a drag.
+    // preventDefault() here was blocking every click-to-position-cursor
+    // inside the text, leaving arrow keys as the only way to move within it.
+    if(target.isContentEditable) return;
     e.preventDefault(); e.stopPropagation();
+    if(state.stylePainter.active){ useStylePainter(target); return; }
+    // Ctrl/Cmd+click toggles multi-selection membership instead of dragging.
+    if(e.ctrlKey || e.metaKey){ toggleMultiSelect(target); return; }
     selectElement(target);
-    // dragging (move/reorder) only starts with Shift held, so a plain
-    // click never risks nudging anything — it only selects. (Not Alt:
-    // most Linux window managers bind Alt+drag to moving the whole
-    // browser window, which steals the gesture before it reaches us.)
-    if(e.shiftKey) startDrag(e, target);
+    // click, hold, and move to drag — no modifier key needed. A plain
+    // click with no real movement never nudges anything: startDrag only
+    // commits a move/reorder once the pointer crosses DRAG_THRESHOLD.
+    startDrag(e, target);
   }, true);
 
   doc.addEventListener('click', function(e){
-    if(!state.editMode) return;
+    if(!state.editMode){
+      // Visualizar mode: a link or button set to "Navegar para artboard"
+      // jumps the canvas to that artboard — this is how a click-through
+      // flow (login button -> next screen) is actually testable.
+      const a = e.target.closest && e.target.closest('a');
+      const m = a && (a.getAttribute('href') || '').match(/^#ae-goto:(.+)$/);
+      if(m){ e.preventDefault(); goToArtboard(m[1]); return; }
+      const btn = e.target.closest && e.target.closest('button[data-ae-goto]');
+      if(btn){ e.preventDefault(); goToArtboard(btn.getAttribute('data-ae-goto')); return; }
+      return;
+    }
     const a = e.target.closest && e.target.closest('a');
     if(a) e.preventDefault();
   }, true);
+
+  // Ctrl+scroll/pinch-zoom over the rendered artboard fires inside this
+  // iframe's own document — it never reaches canvasWrap's wheel listener
+  // in the parent page, so without this the browser's native page zoom
+  // takes over instead of the app's canvas zoom. Same fix pattern as the
+  // cross-iframe drag capture issue: listen inside the iframe too.
+  doc.addEventListener('wheel', onCanvasWheel, { passive: false });
 
   doc.addEventListener('dblclick', function(e){
     if(!state.editMode) return;
@@ -702,7 +1121,10 @@ function attachCanvasListeners(ab){
     const target = e.target;
     if(isEditableEl(target, doc)){
       setActiveArtboard(ab.id);
-      selectElement(target);
+      // preserve an existing multi-selection if you right-click something
+      // that's already part of it — only replace the selection outright
+      // when right-clicking something new.
+      if(state.selected !== target && !state.multiSelect.has(target)) selectElement(target);
       showContextMenu(px, py, elementContextMenuItems(target));
     } else {
       setActiveArtboard(ab.id);
@@ -712,8 +1134,33 @@ function attachCanvasListeners(ab){
   }, true);
 
   doc.defaultView.addEventListener('scroll', updateOverlayLive, true);
-  doc.addEventListener('keydown', function(e){ handleGlobalKeydown(e, doc); if(e.key === 'Shift') setAltCursor(true); });
-  doc.addEventListener('keyup', function(e){ if(e.key === 'Shift') setAltCursor(false); });
+  doc.addEventListener('keydown', function(e){ handleGlobalKeydown(e, doc); });
+
+  // Ctrl+V with an image on the OS clipboard (a screenshot, "copy image"
+  // from a browser, etc.) — the keydown-based element copy/paste above
+  // can't see clipboard *contents*, only a real 'paste' event exposes
+  // clipboardData, so this is handled separately.
+  doc.addEventListener('paste', function(e){
+    if(!state.editMode) return;
+    const items = e.clipboardData && e.clipboardData.items;
+    if(!items) return;
+    const imgItem = Array.from(items).find(function(it){ return it.type.indexOf('image/') === 0; });
+    if(!imgItem) return;
+    e.preventDefault();
+    const file = imgItem.getAsFile();
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = function(){
+      const img = doc.createElement('img');
+      img.src = reader.result;
+      img.style.cssText = 'max-width:400px; height:auto; display:block; margin:0 0 12px;';
+      insertionContainer(doc).appendChild(img);
+      selectElement(img);
+      renderLayers();
+      pushHistory(); syncCodeFromCanvas();
+    };
+    reader.readAsDataURL(file);
+  });
 
   // an OS file drag can enter directly over this iframe before dropHint
   // (in the parent document) has had a chance to raise itself above it —
@@ -728,14 +1175,6 @@ function attachCanvasListeners(ab){
     const file = e.dataTransfer.files[0];
     if(file) importHTMLFile(file);
   });
-}
-
-// hints that shift+drag is available the instant Shift goes down,
-// regardless of which document (editor chrome or an artboard iframe)
-// currently has focus.
-function setAltCursor(active){
-  const doc = getDoc();
-  if(doc && doc.body) doc.body.style.cursor = (active && state.editMode) ? 'grab' : '';
 }
 
 // ---------- layers panel ----------
@@ -802,10 +1241,18 @@ function renderLayers(){
   buildLayerRows(doc.body, layersTree, 0);
 }
 
+function rowMatchesFilter(el, filter){
+  if(!filter) return true;
+  const doc = getDoc();
+  if(shortLabel(el).toLowerCase().indexOf(filter) !== -1) return true;
+  return Array.from(el.children).some(function(c){ return isEditableEl(c, doc) && rowMatchesFilter(c, filter); });
+}
+
 function buildLayerRows(parentEl, container, depth){
   Array.from(parentEl.children).forEach(function(el){
     const doc = getDoc();
     if(!isEditableEl(el, doc)) return;
+    if(!rowMatchesFilter(el, state.layersFilter)) return;
     const row = document.createElement('div');
     row.className = 'layerRow';
     row.style.paddingLeft = (6 + depth * 14) + 'px';
@@ -869,18 +1316,42 @@ function buildLayerRows(parentEl, container, depth){
     const icons = document.createElement('span');
     icons.className = 'icons';
 
+    const eyeSVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+    const eyeOffSVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+    const lockSVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+    const unlockSVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>';
+
     const eye = document.createElement('button');
     eye.className = 'iconBtn' + (el.style.display === 'none' ? ' hidden-state' : '');
-    eye.textContent = (el.style.display === 'none') ? '🚫' : '👁';
+    eye.innerHTML = (el.style.display === 'none') ? eyeOffSVG : eyeSVG;
     eye.title = 'Mostrar/ocultar';
     eye.addEventListener('click', function(ev){
       ev.stopPropagation();
       el.style.display = (el.style.display === 'none') ? '' : 'none';
-      eye.textContent = (el.style.display === 'none') ? '🚫' : '👁';
+      eye.innerHTML = (el.style.display === 'none') ? eyeOffSVG : eyeSVG;
       eye.classList.toggle('hidden-state', el.style.display === 'none');
       pushHistory(); syncCodeFromCanvas();
     });
     icons.appendChild(eye);
+
+    const lock = document.createElement('button');
+    const isLocked = el.dataset.aeLocked === '1';
+    lock.className = 'iconBtn' + (isLocked ? ' hidden-state' : '');
+    lock.innerHTML = isLocked ? lockSVG : unlockSVG;
+    lock.title = 'Bloquear/desbloquear (impede selecionar no canvas)';
+    lock.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      const nowLocked = el.dataset.aeLocked !== '1';
+      if(nowLocked) el.dataset.aeLocked = '1'; else delete el.dataset.aeLocked;
+      lock.innerHTML = nowLocked ? lockSVG : unlockSVG;
+      lock.classList.toggle('hidden-state', nowLocked);
+      if(nowLocked){
+        state.multiSelect.delete(el);
+        if(state.selected === el) selectElement(null);
+      }
+      pushHistory(); syncCodeFromCanvas();
+    });
+    icons.appendChild(lock);
 
     const del = document.createElement('button');
     del.className = 'iconBtn'; del.textContent = '✕'; del.title = 'Excluir';
@@ -893,10 +1364,13 @@ function buildLayerRows(parentEl, container, depth){
     icons.appendChild(del);
     row.appendChild(icons);
 
-    row.addEventListener('click', function(ev){ ev.stopPropagation(); selectElement(el); });
+    row.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      if(ev.ctrlKey || ev.metaKey) toggleMultiSelect(el); else selectElement(el);
+    });
     container.appendChild(row);
 
-    if(editableChildren.length && !collapsedLayers.has(el)){
+    if(editableChildren.length && (state.layersFilter || !collapsedLayers.has(el))){
       buildLayerRows(el, container, depth + 1);
     }
   });
@@ -905,6 +1379,7 @@ function buildLayerRows(parentEl, container, depth){
 function highlightLayerRow(){
   Array.from(layersTree.children).forEach(function(row){
     row.classList.toggle('selected', row._el === state.selected);
+    row.classList.toggle('multiSelected', row._el && state.multiSelect.has(row._el));
   });
 }
 
@@ -985,17 +1460,43 @@ function attributesSectionHTML(el, opts){
       '<div class="field"><label>Placeholder</label><input type="text" id="pAttrPlaceholder" value="' + esc(el.getAttribute('placeholder')) + '"></div>';
   }
   if(tag === 'A'){
+    const href = el.getAttribute('href') || '';
+    const gotoMatch = href.match(/^#ae-goto:(.+)$/);
+    const isGoto = !!gotoMatch;
+    const artboardOptions = artboards.map(function(a){
+      return '<option value="' + a.id + '"' + (gotoMatch && gotoMatch[1] === a.id ? ' selected' : '') + '>' + a.name + '</option>';
+    }).join('');
     return '<div class="propsSection">Link</div>' +
-      '<div class="field"><label>Endereço (href)</label><input type="text" id="pAttrHref" value="' + esc(el.getAttribute('href')) + '"></div>' +
-      '<div class="field"><label>Abrir em</label><select id="pAttrTarget">' + opts(['_self', '_blank'], el.getAttribute('target') || '_self') + '</select></div>';
+      '<div class="field"><label>Ação</label><select id="pAttrLinkMode">' +
+        '<option value="url"' + (!isGoto ? ' selected' : '') + '>Endereço (URL)</option>' +
+        '<option value="goto"' + (isGoto ? ' selected' : '') + '>Navegar para artboard</option>' +
+      '</select></div>' +
+      (isGoto ?
+        '<div class="field"><label>Ir para</label><select id="pAttrGotoArtboard">' + artboardOptions + '</select></div>' +
+        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar — clicar no link leva até esse artboard. No .html exportado isso não navega sozinho (ainda não gera JS de verdade).</div>'
+        :
+        '<div class="field"><label>Endereço (href)</label><input type="text" id="pAttrHref" value="' + esc(href) + '"></div>' +
+        '<div class="field"><label>Abrir em</label><select id="pAttrTarget">' + opts(['_self', '_blank'], el.getAttribute('target') || '_self') + '</select></div>');
   }
   if(tag === 'IMG'){
     return '<div class="propsSection">Imagem</div>' +
       '<div class="field"><label>Texto alternativo (alt)</label><input type="text" id="pAttrAlt" value="' + esc(el.getAttribute('alt')) + '"></div>';
   }
   if(tag === 'BUTTON'){
+    const gotoId = el.getAttribute('data-ae-goto') || '';
+    const artboardOptions = artboards.map(function(a){
+      return '<option value="' + a.id + '"' + (gotoId === a.id ? ' selected' : '') + '>' + a.name + '</option>';
+    }).join('');
     return '<div class="propsSection">Botão</div>' +
-      '<div class="field"><label>Tipo</label><select id="pAttrType">' + opts(['button', 'submit', 'reset'], el.getAttribute('type') || 'button') + '</select></div>';
+      '<div class="field"><label>Tipo</label><select id="pAttrType">' + opts(['button', 'submit', 'reset'], el.getAttribute('type') || 'button') + '</select></div>' +
+      '<div class="field"><label>Ao clicar</label><select id="pAttrBtnAction">' +
+        '<option value=""' + (!gotoId ? ' selected' : '') + '>Nada (só visual)</option>' +
+        '<option value="goto"' + (gotoId ? ' selected' : '') + '>Navegar para artboard</option>' +
+      '</select></div>' +
+      (gotoId ?
+        '<div class="field"><label>Ir para</label><select id="pAttrGotoArtboard">' + artboardOptions + '</select></div>' +
+        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar — clicar no botão leva até esse artboard, tipo testar "Entrar" indo pra tela seguinte.</div>'
+        : '');
   }
   return '';
 }
@@ -1017,6 +1518,39 @@ function bindAttributesSection(el){
   bindAttr('pAttrHref', 'href');
   bindAttr('pAttrTarget', 'target', 'change');
   bindAttr('pAttrAlt', 'alt');
+
+  const linkMode = document.getElementById('pAttrLinkMode');
+  if(linkMode){
+    linkMode.addEventListener('change', function(){
+      if(this.value === 'goto'){
+        const other = artboards.find(function(a){ return a.id !== state.activeId; }) || artboards[0];
+        el.setAttribute('href', other ? '#ae-goto:' + other.id : '#ae-goto:');
+      } else {
+        el.setAttribute('href', '');
+      }
+      pushHistory(); syncCodeFromCanvas(); renderProps();
+    });
+  }
+  const btnAction = document.getElementById('pAttrBtnAction');
+  if(btnAction){
+    btnAction.addEventListener('change', function(){
+      if(this.value === 'goto'){
+        const other = artboards.find(function(a){ return a.id !== state.activeId; }) || artboards[0];
+        if(other) el.setAttribute('data-ae-goto', other.id);
+      } else {
+        el.removeAttribute('data-ae-goto');
+      }
+      pushHistory(); syncCodeFromCanvas(); renderProps();
+    });
+  }
+  const gotoSel = document.getElementById('pAttrGotoArtboard');
+  if(gotoSel){
+    gotoSel.addEventListener('change', function(){
+      if(el.tagName === 'BUTTON') el.setAttribute('data-ae-goto', this.value);
+      else el.setAttribute('href', '#ae-goto:' + this.value);
+      pushHistory(); syncCodeFromCanvas();
+    });
+  }
 }
 
 // ---------- background pattern (dots / grid) ----------
@@ -1067,13 +1601,20 @@ function getClassRuleBody(doc, selector){
   return found ? found.body.trim() : '';
 }
 function setClassRuleBody(doc, selector, newBody){
-  const cssText = getStyleText(doc);
-  const found = findRuleBlock(cssText, selector);
+  let cssText = getStyleText(doc);
   const block = selector + ' {\n  ' + newBody.trim().replace(/\n/g, '\n  ') + '\n}';
-  const updated = found
-    ? cssText.slice(0, found.index) + block + cssText.slice(found.index + found.full.length)
-    : cssText + '\n\n' + block + '\n';
-  setStyleText(doc, updated);
+  let firstIndex = -1;
+  let found;
+  while((found = findRuleBlock(cssText, selector)) !== null){
+    if(firstIndex === -1) firstIndex = found.index;
+    cssText = cssText.slice(0, found.index) + cssText.slice(found.index + found.full.length);
+  }
+  if(firstIndex !== -1){
+    cssText = cssText.slice(0, firstIndex) + block + '\n' + cssText.slice(firstIndex);
+  } else {
+    cssText = cssText.trim() + (cssText.trim() ? '\n\n' : '') + block + '\n';
+  }
+  setStyleText(doc, cssText);
 }
 
 // ---------- properties panel: element ----------
@@ -1115,9 +1656,28 @@ function renderProps(){
     '<div class="field"><textarea id="pClassRuleBody" rows="8" spellcheck="false" placeholder="background: #161920;\ncolor: #eef0f4;">' + getClassRuleBody(doc, '.' + ruleClass) + '</textarea></div>' +
     '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Isso edita a regra <code>.' + ruleClass + '</code> no &lt;style&gt; — afeta todo elemento que usa essa classe, não só este.</div>';
 
+  const allClassRules = getAllClassRules(doc);
+  const currentClassStr = (el.className || '').trim();
+  const classNamesInDoc = allClassRules.map(function(r){ return r.className; });
+
+  let classSelectOptions = '<option value=""' + (!currentClassStr ? ' selected' : '') + '>(Sem classe)</option>';
+  if(currentClassStr && !classNamesInDoc.includes(currentClassStr)){
+    classSelectOptions += '<option value="' + currentClassStr.replace(/"/g, '&quot;') + '" selected>.' + currentClassStr + '</option>';
+  }
+  classNamesInDoc.forEach(function(c){
+    const isSel = c === currentClassStr;
+    classSelectOptions += '<option value="' + c + '"' + (isSel ? ' selected' : '') + '>.' + c + '</option>';
+  });
+  classSelectOptions += '<option value="__new__">+ Criar nova classe...</option>';
+  classSelectOptions += '<option value="__custom__">✎ Texto livre...</option>';
+
+  const selCount = effectiveSelection().length;
   propsBody.innerHTML =
-    '<div class="field"><label>Elemento</label><div style="color:var(--text-dim)">' + shortLabel(el) + '</div></div>' +
-    '<div class="field"><label>Classe (CSS)</label><input type="text" id="pClassName" value="' + (el.className || '').replace(/"/g, '&quot;') + '" placeholder="ex: btn-primary"></div>' +
+    (selCount > 1 ?
+      '<div class="field" style="color:var(--accent); font-size:12px; font-weight:700;">Editando ' + selCount + ' elementos selecionados — mudar um campo aqui muda todos.</div>'
+      : '') +
+    '<div class="field"><label>Elemento</label><div style="color:var(--text-dim)">' + shortLabel(el) + (selCount > 1 ? ' (principal)' : '') + '</div></div>' +
+    '<div class="field"><label>Classe (CSS)</label><select id="pClassName">' + classSelectOptions + '</select></div>' +
 
     classRuleHTML +
 
@@ -1129,36 +1689,37 @@ function renderProps(){
       '<div class="field"><label>Posição</label><select id="pPosition">' + opts(['absolute', 'relative', 'static', 'fixed'], positionVal) + '</select></div>' +
     '</div>' +
     (isFlex ?
+      '<div class="field"><label>Direção</label>' + flexIconGroupHTML('pFlexDir', ['row', 'column', 'row-reverse', 'column-reverse'], cs.flexDirection, dirIconIcon) + '</div>' +
+      '<div class="field"><label>Alinhar (align-items)</label>' + flexIconGroupHTML('pAlign', ['stretch', 'flex-start', 'center', 'flex-end'], cs.alignItems, alignIconIcon) + '</div>' +
+      '<div class="field"><label>Distribuir (justify)</label>' + flexIconGroupHTML('pJustify', ['flex-start', 'center', 'flex-end', 'space-between', 'space-around'], cs.justifyContent, justifyIconIcon) + '</div>' +
       '<div class="row2">' +
-        '<div class="field"><label>Direção</label><select id="pFlexDir">' + opts(['row', 'column', 'row-reverse', 'column-reverse'], cs.flexDirection) + '</select></div>' +
         '<div class="field"><label>Quebra</label><select id="pFlexWrap">' + opts(['nowrap', 'wrap', 'wrap-reverse'], cs.flexWrap) + '</select></div>' +
-      '</div>' +
-      '<div class="row2">' +
-        '<div class="field"><label>Alinhar (align-items)</label><select id="pAlign">' + opts(['stretch', 'flex-start', 'center', 'flex-end'], cs.alignItems) + '</select></div>' +
-        '<div class="field"><label>Distribuir (justify)</label><select id="pJustify">' + opts(['flex-start', 'center', 'flex-end', 'space-between', 'space-around'], cs.justifyContent) + '</select></div>' +
-      '</div>' +
-      '<div class="field"><label>Gap (px)</label><input type="number" id="pGap" value="' + (parseFloat(cs.gap) || 0) + '"></div>'
+        '<div class="field"><label>Gap (px)</label><input type="number" id="pGap" value="' + (parseFloat(cs.gap) || 0) + '"></div>' +
+      '</div>'
       : '') +
 
-    '<div class="propsSection">Posição livre</div>' +
     (free ?
-      '<div class="row2">' +
+      '<div class="row3">' +
         '<div class="field"><label>X</label><input type="number" id="pX"></div>' +
         '<div class="field"><label>Y</label><input type="number" id="pY"></div>' +
-      '</div>' +
-      '<div class="field"><label>Z-index</label><input type="number" id="pZ" value="' + (parseInt(el.style.zIndex) || 0) + '"></div>'
-      : '<div class="field" style="color:var(--text-dim); font-size:12px;">Elemento em fluxo normal — arraste no artboard (Shift+arraste) pra reordenar entre os irmãos, ou mude Posição pra "absolute" aqui em cima pra posicionar livremente.</div>') +
+        '<div class="field"><label>Z-index</label><input type="number" id="pZ" value="' + (parseInt(el.style.zIndex) || 0) + '"></div>' +
+      '</div>'
+      : '') +
 
     '<div class="propsSection">Tamanho</div>' +
     '<div class="row2">' +
-      '<div class="field"><label>Largura</label><div class="fieldRow"><input type="number" id="pW"><button type="button" class="miniBtn" id="pWFill" title="100% da largura do pai">100%</button></div></div>' +
-      '<div class="field"><label>Altura</label><div class="fieldRow"><input type="number" id="pH"><button type="button" class="miniBtn" id="pHFill" title="100% da altura do pai">100%</button></div></div>' +
+      '<div class="field"><label>Largura</label><div class="fieldRow"><input type="number" id="pW"><select id="pWUnit" title="Unidade — % é relativo ao elemento pai"><option value="px">px</option><option value="%">%</option></select></div></div>' +
+      '<div class="field"><label>Altura</label><div class="fieldRow"><input type="number" id="pH"><select id="pHUnit" title="Unidade — % é relativo ao elemento pai"><option value="px">px</option><option value="%">%</option></select></div></div>' +
     '</div>' +
 
     '<div class="propsSection">Aparência</div>' +
     '<div class="row2">' +
-      '<div class="field"><label>Fundo</label><input type="color" id="pBg" value="' + bg + '"></div>' +
-      '<div class="field"><label>Texto</label><input type="color" id="pColor" value="' + color + '"></div>' +
+      '<div class="field"><label>Fundo</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pBg', cs.backgroundColor) + varDropdownHTML(doc, el.style.backgroundColor || el.style.background, 'pBgVar') + '</div></div>' +
+      '<div class="field"><label>Texto</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pColor', cs.color) + varDropdownHTML(doc, el.style.color, 'pColorVar') + '</div></div>' +
+    '</div>' +
+    '<div class="row2">' +
+      '<div class="field"><label>Fonte (família)</label><select id="pFontFamily">' + fontFamilyOptionsHTML(el.style.fontFamily) + '</select></div>' +
+      '<div class="field"><label>Peso</label><select id="pFontWeight">' + opts(['400', '500', '600', '700', '800'], el.style.fontWeight || '400') + '</select></div>' +
     '</div>' +
     '<div class="row2">' +
       '<div class="field"><label>Fonte (px)</label><input type="number" id="pFont" value="' + (parseFloat(cs.fontSize) || 14) + '"></div>' +
@@ -1191,23 +1752,61 @@ function renderProps(){
       '<div class="field"><label>Espessura (px)</label><input type="number" id="pBorderW" value="' + px(cs.borderTopWidth) + '"></div>' +
       '<div class="field"><label>Estilo</label><select id="pBorderStyle">' + opts(['none', 'solid', 'dashed', 'dotted'], cs.borderTopStyle === 'none' ? 'none' : cs.borderTopStyle) + '</select></div>' +
     '</div>' +
-    '<div class="field"><label>Cor da borda</label><input type="color" id="pBorderColor" value="' + rgbToHex(cs.borderTopColor) + '"></div>' +
+    '<div class="field"><label>Cor da borda</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pBorderColor', cs.borderTopColor) + varDropdownHTML(doc, el.style.borderColor, 'pBorderColorVar') + '</div></div>' +
 
     '<hr>' +
-    '<div class="field"><label>CSS livre (style)</label><textarea id="pStyle" rows="6" spellcheck="false">' + (el.getAttribute('style') || '') + '</textarea></div>';
+    '<div class="field">' +
+      '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">' +
+        '<label>CSS livre (style)</label>' +
+        (getRootVariables(doc).length ?
+          '<select id="pInsertVarStyle" style="max-width:130px; font-size:11px;" title="Inserir variável do :root">' +
+            '<option value="">+ Inserir var()...</option>' +
+            getRootVariables(doc).map(function(v){ return '<option value="var(' + v.name + ')">' + v.name + ' (' + v.value + ')</option>'; }).join('') +
+          '</select>' : '') +
+      '</div>' +
+      '<textarea id="pStyle" rows="6" spellcheck="false">' + (el.getAttribute('style') || '') + '</textarea>' +
+    '</div>';
 
   const rect = elRectToStage(el);
   if(free){
     document.getElementById('pX').value = Math.round(parseFloat(el.style.left) || rect.left);
     document.getElementById('pY').value = Math.round(parseFloat(el.style.top) || rect.top);
   }
-  document.getElementById('pW').value = Math.round(rect.width);
-  document.getElementById('pH').value = Math.round(rect.height);
+  function initSizeField(inputId, unitId, styleVal, pxFallback){
+    const isPct = /%\s*$/.test(styleVal || '');
+    document.getElementById(unitId).value = isPct ? '%' : 'px';
+    document.getElementById(inputId).value = isPct ? Math.round(parseFloat(styleVal)) : Math.round(pxFallback);
+  }
+  initSizeField('pW', 'pWUnit', el.style.width, rect.width);
+  initSizeField('pH', 'pHUnit', el.style.height, rect.height);
 
   bindAttributesSection(el);
-  document.getElementById('pClassName').addEventListener('change', function(){
-    el.className = this.value;
-    pushHistory(); syncCodeFromCanvas(); renderLayers(); renderProps();
+  const pClassNameSelect = document.getElementById('pClassName');
+  pClassNameSelect.addEventListener('change', async function(){
+    const val = this.value;
+    if(val === '__new__'){
+      const name = await showPrompt('Nome da nova classe CSS (ex: btn-custom):', '', 'Nova Classe CSS');
+      if(name && name.trim()){
+        const cleanName = name.trim().replace(/^\./, '').replace(/\s+/g, '-');
+        setClassRuleBody(doc, '.' + cleanName, '/* propriedades de .' + cleanName + ' */\nbackground-color: transparent;\ncolor: inherit;');
+        el.className = cleanName;
+        state.rulePickedClass = cleanName;
+        pushHistory(); syncCodeFromCanvas(); renderLayers(); renderProps();
+      } else {
+        renderProps();
+      }
+    } else if(val === '__custom__'){
+      const text = await showPrompt('Digite a(s) classe(s) separadas por espaço:', el.className || '', 'Editar Classe CSS');
+      if(text !== null){
+        el.className = text.trim();
+        pushHistory(); syncCodeFromCanvas(); renderLayers(); renderProps();
+      } else {
+        renderProps();
+      }
+    } else {
+      el.className = val;
+      pushHistory(); syncCodeFromCanvas(); renderLayers(); renderProps();
+    }
   });
 
   if(ruleClass){
@@ -1223,7 +1822,7 @@ function renderProps(){
   const pBgPattern = document.getElementById('pBgPattern');
   const pBgPatternColor = document.getElementById('pBgPatternColor');
   function applyPattern(){
-    applyBgPattern(el, pBgPattern.value, pBgPatternColor.value);
+    effectiveSelection().forEach(function(t){ applyBgPattern(t, pBgPattern.value, pBgPatternColor.value); });
     pushHistory(); syncCodeFromCanvas();
   }
   pBgPattern.addEventListener('change', applyPattern);
@@ -1231,7 +1830,7 @@ function renderProps(){
 
   const pDisplay = document.getElementById('pDisplay');
   pDisplay.addEventListener('change', function(){
-    el.style.display = pDisplay.value;
+    effectiveSelection().forEach(function(t){ t.style.display = pDisplay.value; });
     pushHistory(); syncCodeFromCanvas(); renderLayers();
     renderProps();
     updateOverlayLive();
@@ -1239,58 +1838,106 @@ function renderProps(){
   const pPosition = document.getElementById('pPosition');
   pPosition.addEventListener('change', function(){
     const v = pPosition.value;
-    if(v === 'absolute' || v === 'fixed'){ ensureAbsolute(el); el.style.position = v; }
-    else { el.style.position = v; }
+    effectiveSelection().forEach(function(t){
+      if(v === 'absolute' || v === 'fixed'){ ensureAbsolute(t); t.style.position = v; }
+      else { t.style.position = v; }
+    });
     pushHistory(); syncCodeFromCanvas(); renderOverlay();
     renderProps();
     updateOverlayLive();
   });
   if(isFlex){
-    bindProp('pFlexDir', function(v){ el.style.flexDirection = v; }, 'change');
-    bindProp('pFlexWrap', function(v){ el.style.flexWrap = v; }, 'change');
-    bindProp('pAlign', function(v){ el.style.alignItems = v; }, 'change');
-    bindProp('pJustify', function(v){ el.style.justifyContent = v; }, 'change');
-    bindProp('pGap', function(v){ el.style.gap = v + 'px'; });
+    bindFlexIconGroup('pFlexDir', function(v, el){ el.style.flexDirection = v; });
+    bindFlexIconGroup('pAlign', function(v, el){ el.style.alignItems = v; });
+    bindFlexIconGroup('pJustify', function(v, el){ el.style.justifyContent = v; });
+    bindProp('pFlexWrap', function(v, el){ el.style.flexWrap = v; }, 'change');
+    bindProp('pGap', function(v, el){ el.style.gap = v + 'px'; });
   }
-  if(free){ bindProp('pZ', function(v){ el.style.zIndex = v; }); }
+  if(free){ bindProp('pZ', function(v, el){ el.style.zIndex = v; }); }
 
-  document.getElementById('pWFill').addEventListener('click', function(){
-    el.style.width = '100%';
+  bindPropPrimaryOnly('pX', function(v){ el.style.left = v + 'px'; });
+  bindPropPrimaryOnly('pY', function(v){ el.style.top = v + 'px'; });
+  bindSizeProp('pW', 'pWUnit', 'width');
+  bindSizeProp('pH', 'pHUnit', 'height');
+  bindColorSwatch('pBg', function(v, el){ el.style.backgroundColor = v; });
+  bindColorSwatch('pColor', function(v, el){ el.style.color = v; });
+  bindProp('pFontFamily', applyFontFamily, 'change');
+  bindProp('pFontWeight', function(v, el){ el.style.fontWeight = v; }, 'change');
+  bindProp('pFont', function(v, el){ el.style.fontSize = v + 'px'; });
+  bindProp('pRadius', function(v, el){ el.style.borderRadius = v + 'px'; });
+  bindProp('pOpacity', function(v, el){ el.style.opacity = (v / 100); });
+
+  bindProp('pPadT', function(v, el){ el.style.paddingTop = v + 'px'; });
+  bindProp('pPadR', function(v, el){ el.style.paddingRight = v + 'px'; });
+  bindProp('pPadB', function(v, el){ el.style.paddingBottom = v + 'px'; });
+  bindProp('pPadL', function(v, el){ el.style.paddingLeft = v + 'px'; });
+
+  bindProp('pMarT', function(v, el){ el.style.marginTop = v + 'px'; });
+  bindProp('pMarR', function(v, el){ el.style.marginRight = v + 'px'; });
+  bindProp('pMarB', function(v, el){ el.style.marginBottom = v + 'px'; });
+  bindProp('pMarL', function(v, el){ el.style.marginLeft = v + 'px'; });
+
+  bindProp('pBorderW', function(v, el){ el.style.borderWidth = v + 'px'; if(parseFloat(v) > 0 && (!el.style.borderStyle || el.style.borderStyle === 'none')) el.style.borderStyle = 'solid'; });
+  bindProp('pBorderStyle', function(v, el){ el.style.borderStyle = v; if(v !== 'none' && (!el.style.borderWidth || parseFloat(el.style.borderWidth) === 0)) el.style.borderWidth = '1px'; }, 'change');
+  bindColorSwatch('pBorderColor', function(v, el){ el.style.borderColor = v; });
+  const pBgVar = document.getElementById('pBgVar');
+  if(pBgVar){
+    pBgVar.addEventListener('change', function(){
+      if(this.value){ effectiveSelection().forEach(function(t){ t.style.backgroundColor = pBgVar.value; }); pushHistory(); syncCodeFromCanvas(); updateOverlayLive(); renderProps(); }
+    });
+  }
+  const pColorVar = document.getElementById('pColorVar');
+  if(pColorVar){
+    pColorVar.addEventListener('change', function(){
+      if(this.value){ effectiveSelection().forEach(function(t){ t.style.color = pColorVar.value; }); pushHistory(); syncCodeFromCanvas(); updateOverlayLive(); renderProps(); }
+    });
+  }
+  const pBorderColorVar = document.getElementById('pBorderColorVar');
+  if(pBorderColorVar){
+    pBorderColorVar.addEventListener('change', function(){
+      if(this.value){ effectiveSelection().forEach(function(t){ t.style.borderColor = pBorderColorVar.value; }); pushHistory(); syncCodeFromCanvas(); updateOverlayLive(); renderProps(); }
+    });
+  }
+
+  document.getElementById('pStyle').addEventListener('change', function(){
+    el.setAttribute('style', this.value);
     pushHistory(); syncCodeFromCanvas(); updateOverlayLive(); renderProps();
   });
-  document.getElementById('pHFill').addEventListener('click', function(){
-    el.style.height = '100%';
-    pushHistory(); syncCodeFromCanvas(); updateOverlayLive(); renderProps();
-  });
 
-  bindProp('pX', function(v){ el.style.left = v + 'px'; });
-  bindProp('pY', function(v){ el.style.top = v + 'px'; });
-  bindProp('pW', function(v){ el.style.width = v + 'px'; });
-  bindProp('pH', function(v){ el.style.height = v + 'px'; });
-  bindProp('pBg', function(v){ el.style.backgroundColor = v; }, 'change');
-  bindProp('pColor', function(v){ el.style.color = v; }, 'change');
-  bindProp('pFont', function(v){ el.style.fontSize = v + 'px'; });
-  bindProp('pRadius', function(v){ el.style.borderRadius = v + 'px'; });
-  bindProp('pOpacity', function(v){ el.style.opacity = (v / 100); });
-
-  bindProp('pPadT', function(v){ el.style.paddingTop = v + 'px'; });
-  bindProp('pPadR', function(v){ el.style.paddingRight = v + 'px'; });
-  bindProp('pPadB', function(v){ el.style.paddingBottom = v + 'px'; });
-  bindProp('pPadL', function(v){ el.style.paddingLeft = v + 'px'; });
-
-  bindProp('pMarT', function(v){ el.style.marginTop = v + 'px'; });
-  bindProp('pMarR', function(v){ el.style.marginRight = v + 'px'; });
-  bindProp('pMarB', function(v){ el.style.marginBottom = v + 'px'; });
-  bindProp('pMarL', function(v){ el.style.marginLeft = v + 'px'; });
-
-  bindProp('pBorderW', function(v){ el.style.borderWidth = v + 'px'; if(parseFloat(v) > 0 && (!el.style.borderStyle || el.style.borderStyle === 'none')) el.style.borderStyle = 'solid'; });
-  bindProp('pBorderStyle', function(v){ el.style.borderStyle = v; }, 'change');
-  bindProp('pBorderColor', function(v){ el.style.borderColor = v; }, 'change');
-
-  bindProp('pStyle', function(v){ el.setAttribute('style', v); }, 'change');
+  const pInsertVarStyle = document.getElementById('pInsertVarStyle');
+  if(pInsertVarStyle){
+    pInsertVarStyle.addEventListener('change', function(){
+      const val = this.value;
+      if(!val) return;
+      const pStyle = document.getElementById('pStyle');
+      const cur = pStyle.value;
+      const separator = (cur && !cur.endsWith(';') && !cur.endsWith('\n')) ? '; ' : '';
+      pStyle.value = cur + separator + val;
+      el.setAttribute('style', pStyle.value);
+      pushHistory(); syncCodeFromCanvas();
+      this.value = '';
+    });
+  }
 }
 
+// applies fn(value, targetEl) to every element in the current selection
+// (not just the primary one), so with several elements selected, changing
+// one field changes all of them at once.
 function bindProp(id, fn, evt){
+  const input = document.getElementById(id);
+  if(!input) return;
+  input.addEventListener(evt || 'input', function(){
+    effectiveSelection().forEach(function(target){ fn(input.value, target); });
+    updateOverlayLive();
+    clearTimeout(codeDebounce);
+    codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+  });
+}
+
+// X/Y are absolute pixel coordinates — copying the same ones onto every
+// selected element would stack them on top of each other, so those two
+// stay primary-only (use Alinhar/Distribuir for multi-element positioning).
+function bindPropPrimaryOnly(id, fn, evt){
   const input = document.getElementById(id);
   if(!input) return;
   input.addEventListener(evt || 'input', function(){
@@ -1301,10 +1948,190 @@ function bindProp(id, fn, evt){
   });
 }
 
+// width/height need a unit toggle (px vs %) instead of always hardcoding
+// px — a flex child sized "50%" of its parent should stay 50% if the
+// artboard gets resized, not a pixel number computed by hand once.
+function bindSizeProp(inputId, unitId, styleProp){
+  const input = document.getElementById(inputId);
+  const unitSel = document.getElementById(unitId);
+  if(!input || !unitSel) return;
+  function apply(){
+    const val = input.value + unitSel.value;
+    effectiveSelection().forEach(function(t){ t.style[styleProp] = val; });
+    updateOverlayLive();
+    clearTimeout(codeDebounce);
+    codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+  }
+  input.addEventListener('input', apply);
+  unitSel.addEventListener('change', apply);
+}
+
 function rgbToHex(rgb){
   if(!rgb || rgb.indexOf('rgb') !== 0) return '#ffffff';
   const nums = rgb.match(/[\d.]+/g).map(Number);
   return '#' + nums.slice(0, 3).map(function(n){ return n.toString(16).padStart(2, '0'); }).join('');
+}
+
+// ---------- color swatch + rgba popover ----------
+// <input type="color"> can't represent alpha at all, so overlays/shadows/
+// glass panels (rgba backgrounds) couldn't be set from the properties
+// panel — this swatch+popover pair fixes that: a native picker for hue/RGB,
+// a slider for alpha, and a text field that accepts rgba()/hex directly.
+
+function parseColorParts(str){
+  str = (str || '').trim();
+  if(!str || str === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+  if(str[0] === '#'){
+    let hex = str.slice(1);
+    if(hex.length === 3) hex = hex.split('').map(function(c){ return c + c; }).join('');
+    const n = parseInt(hex.slice(0, 6), 16);
+    const a = hex.length >= 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1;
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: a };
+  }
+  const nums = (str.match(/[\d.]+/g) || [0, 0, 0, 1]).map(Number);
+  return { r: nums[0] || 0, g: nums[1] || 0, b: nums[2] || 0, a: nums.length > 3 ? nums[3] : 1 };
+}
+function partsToRgba(p){
+  return 'rgba(' + Math.round(p.r) + ', ' + Math.round(p.g) + ', ' + Math.round(p.b) + ', ' + (Math.round(p.a * 100) / 100) + ')';
+}
+function hexFromRgbParts(p){
+  return '#' + [p.r, p.g, p.b].map(function(n){ return Math.round(n).toString(16).padStart(2, '0'); }).join('');
+}
+
+function colorSwatchHTML(id, colorStr){
+  return '<button type="button" class="colorSwatchBtn" id="' + id + '" data-color="' + (colorStr || '').replace(/"/g, '&quot;') + '"><span style="background:' + (colorStr || 'transparent') + '"></span></button>';
+}
+
+let colorPopoverOnChange = null;
+function closeColorPopover(){
+  document.getElementById('colorPopover').classList.remove('open');
+  colorPopoverOnChange = null;
+}
+function openColorPopover(swatchBtn, currentColor, onChange){
+  const pop = document.getElementById('colorPopover');
+  const parts = parseColorParts(currentColor);
+  document.getElementById('cpHue').value = hexFromRgbParts(parts);
+  document.getElementById('cpAlpha').value = Math.round(parts.a * 100);
+  document.getElementById('cpAlphaLabel').textContent = Math.round(parts.a * 100) + '%';
+  document.getElementById('cpText').value = partsToRgba(parts);
+  const r = swatchBtn.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 246)) + 'px';
+  pop.style.top = (r.bottom + 6) + 'px';
+  pop.classList.add('open');
+  colorPopoverOnChange = onChange;
+}
+// applies fn(value, targetEl) to every selected element when the popover's
+// color changes (bulk-edit for multi-selection, same as the other props).
+function bindColorSwatch(id, fn){
+  const btn = document.getElementById(id);
+  if(!btn) return;
+  btn.addEventListener('click', function(e){
+    e.stopPropagation();
+    openColorPopover(btn, btn.dataset.color, function(rgba){
+      btn.dataset.color = rgba;
+      btn.querySelector('span').style.background = rgba;
+      effectiveSelection().forEach(function(target){ fn(rgba, target); });
+      updateOverlayLive();
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    });
+  });
+}
+
+// ---------- font family picker ----------
+// small curated catalog — system stacks need nothing extra; Google-hosted
+// ones need their stylesheet injected into the artboard's own <head> the
+// first time they're used, or the browser just falls back silently.
+const SYSTEM_FONTS = {
+  'Padrão do sistema': '-apple-system, "Segoe UI", Roboto, Arial, sans-serif',
+  'Georgia (serif)': 'Georgia, "Times New Roman", serif',
+  'Courier (mono)': '"Courier New", Courier, monospace'
+};
+const GOOGLE_FONTS = {
+  'Inter': 'Inter:wght@400;500;600;700',
+  'Manrope': 'Manrope:wght@400;500;600;700;800',
+  'Fraunces': 'Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700',
+  'Poppins': 'Poppins:wght@400;500;600;700',
+  'Playfair Display': 'Playfair+Display:wght@500;600;700',
+  'Space Grotesk': 'Space+Grotesk:wght@400;500;600;700',
+  'JetBrains Mono': 'JetBrains+Mono:wght@400;500;600'
+};
+function ensureGoogleFont(doc, family){
+  if(!GOOGLE_FONTS[family] || !doc.head) return;
+  const id = 'gf-' + family.replace(/\s+/g, '-');
+  if(doc.head.querySelector('#' + id)) return;
+  const link = doc.createElement('link');
+  link.rel = 'stylesheet'; link.id = id;
+  link.href = 'https://fonts.googleapis.com/css2?family=' + GOOGLE_FONTS[family] + '&display=swap';
+  doc.head.appendChild(link);
+}
+function fontFamilyOptionsHTML(currentFF){
+  const cur = (currentFF || '').replace(/["']/g, '').split(',')[0].trim();
+  let html = '<option value=""' + (!cur ? ' selected' : '') + '>(herdado do pai)</option>';
+  html += '<optgroup label="Sistema">';
+  Object.keys(SYSTEM_FONTS).forEach(function(label){
+    const stack = SYSTEM_FONTS[label];
+    const name = stack.split(',')[0].replace(/["']/g, '').trim();
+    html += '<option value="' + stack.replace(/"/g, '&quot;') + '"' + (cur === name ? ' selected' : '') + '>' + label + '</option>';
+  });
+  html += '</optgroup><optgroup label="Google Fonts">';
+  Object.keys(GOOGLE_FONTS).forEach(function(name){
+    html += '<option value="' + name + '"' + (cur === name ? ' selected' : '') + '>' + name + '</option>';
+  });
+  html += '</optgroup>';
+  return html;
+}
+function applyFontFamily(v, target){
+  if(!v){ target.style.fontFamily = ''; return; }
+  if(GOOGLE_FONTS[v]){
+    ensureGoogleFont(target.ownerDocument, v);
+    target.style.fontFamily = '"' + v + '", sans-serif';
+  } else {
+    target.style.fontFamily = v;
+  }
+}
+
+// ---------- flex control icon buttons ----------
+// direção/alinhar/distribuir used to be plain <select> text — each option
+// here is a tiny live swatch actually laid out with that CSS value, so the
+// icon can't drift out of sync with what it means.
+
+function flexBar(w, h){ return '<span class="bar" style="width:' + w + '; height:' + h + ';"></span>'; }
+
+function dirIconIcon(dir){
+  const isCol = dir.indexOf('column') === 0;
+  const bar = isCol ? flexBar('12px', '3px') : flexBar('3px', '12px');
+  return '<span class="swatch" style="flex-direction:' + dir + ';">' + bar + bar + bar + '</span>';
+}
+function alignIconIcon(val){
+  const heights = val === 'stretch' ? ['100%', '100%', '100%'] : ['8px', '14px', '6px'];
+  return '<span class="swatch" style="flex-direction:row; align-items:' + val + ';">' +
+    flexBar('3px', heights[0]) + flexBar('3px', heights[1]) + flexBar('3px', heights[2]) + '</span>';
+}
+function justifyIconIcon(val){
+  const gap = val.indexOf('space') === 0 ? '0' : '2px';
+  return '<span class="swatch" style="flex-direction:row; justify-content:' + val + '; align-items:center; gap:' + gap + ';">' +
+    flexBar('3px', '10px') + flexBar('3px', '10px') + flexBar('3px', '10px') + '</span>';
+}
+
+function flexIconGroupHTML(id, options, current, iconFn){
+  return '<div class="flexIconGroup" id="' + id + '">' + options.map(function(o){
+    return '<button type="button" class="flexIconBtn' + (o === current ? ' active' : '') + '" data-value="' + o + '" title="' + o + '">' + iconFn(o) + '</button>';
+  }).join('') + '</div>';
+}
+function bindFlexIconGroup(id, fn){
+  const group = document.getElementById(id);
+  if(!group) return;
+  Array.from(group.querySelectorAll('.flexIconBtn')).forEach(function(btn){
+    btn.addEventListener('click', function(){
+      Array.from(group.querySelectorAll('.flexIconBtn')).forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+      effectiveSelection().forEach(function(t){ fn(btn.dataset.value, t); });
+      updateOverlayLive();
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    });
+  });
 }
 
 // ---------- add elements ----------
@@ -1413,6 +2240,42 @@ const ELEMENT_TEMPLATES = {
     el.type = 'text'; el.placeholder = 'Digite aqui...';
     el.style.cssText = 'font:inherit; font-size:14px; padding:10px 12px; border:1px solid #ccc; border-radius:6px; margin:0 0 12px; display:block;';
     return el;
+  } },
+  textarea: { label: 'Textarea', build: function(doc){
+    const el = doc.createElement('textarea');
+    el.placeholder = 'Digite aqui...'; el.rows = 4;
+    el.style.cssText = 'font:inherit; font-size:14px; padding:10px 12px; border:1px solid #ccc; border-radius:6px; margin:0 0 12px; display:block; resize:vertical;';
+    return el;
+  } },
+  select: { label: 'Select (lista suspensa)', build: function(doc){
+    const el = doc.createElement('select');
+    el.style.cssText = 'font:inherit; font-size:14px; padding:10px 12px; border:1px solid #ccc; border-radius:6px; margin:0 0 12px; display:block;';
+    ['Opção 1', 'Opção 2', 'Opção 3'].forEach(function(t){ const o = doc.createElement('option'); o.textContent = t; el.appendChild(o); });
+    return el;
+  } },
+  checkbox: { label: 'Checkbox', build: function(doc){
+    const el = doc.createElement('label');
+    el.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:14px; margin:0 0 12px;';
+    const input = doc.createElement('input'); input.type = 'checkbox';
+    el.appendChild(input); el.appendChild(doc.createTextNode('Opção'));
+    return el;
+  } },
+  radio: { label: 'Radio', build: function(doc){
+    const el = doc.createElement('label');
+    el.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:14px; margin:0 0 12px;';
+    const input = doc.createElement('input'); input.type = 'radio'; input.name = 'radio-group';
+    el.appendChild(input); el.appendChild(doc.createTextNode('Opção'));
+    return el;
+  } },
+  hr: { label: '— Linha', build: function(doc){
+    const el = doc.createElement('hr');
+    el.style.cssText = 'border:none; border-top:2px solid #d9dce4; margin:16px 0;';
+    return el;
+  } },
+  circle: { label: '○ Círculo / elipse', build: function(doc){
+    const el = doc.createElement('div');
+    el.style.cssText = 'width:100px; height:100px; border-radius:50%; background:#6d8bff;';
+    return el;
   } }
 };
 
@@ -1428,12 +2291,56 @@ function addElement(type){
   return el;
 }
 
+// ---------- small icon catalog ----------
+
+const ICON_SET = {
+  check: { label: 'Check', path: '<polyline points="20 6 9 17 4 12"/>' },
+  close: { label: 'Fechar (X)', path: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>' },
+  heart: { label: 'Coração', path: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/>' },
+  star: { label: 'Estrela', path: '<polygon points="12 2 15.1 8.6 22 9.3 17 14.1 18.2 21 12 17.6 5.8 21 7 14.1 2 9.3 8.9 8.6"/>' },
+  search: { label: 'Buscar', path: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>' },
+  home: { label: 'Home', path: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h5v-6h4v6h5V10"/>' },
+  menu: { label: 'Menu (hamburger)', path: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>' },
+  arrow: { label: 'Seta →', path: '<line x1="4" y1="12" x2="20" y2="12"/><polyline points="13 5 20 12 13 19"/>' },
+  mail: { label: 'E-mail', path: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 6 10 7 10-7"/>' },
+  user: { label: 'Usuário', path: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>' }
+};
+
+function insertIcon(key){
+  const doc = getDoc();
+  const def = ICON_SET[key];
+  if(!doc || !def) return;
+  const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '32');
+  svg.setAttribute('height', '32');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.innerHTML = def.path;
+  svg.style.display = 'block';
+  svg.style.color = '#1b1d23';
+  insertionContainer(doc).appendChild(svg);
+  selectElement(svg);
+  renderLayers();
+  pushHistory(); syncCodeFromCanvas();
+}
+
+function showIconMenu(x, y){
+  const items = Object.keys(ICON_SET).map(function(key){
+    return { label: '◇ ' + ICON_SET[key].label, action: function(){ insertIcon(key); } };
+  });
+  showContextMenu(x, y, items);
+}
+
 function showAddElementMenu(x, y){
   const items = Object.keys(ELEMENT_TEMPLATES).map(function(key){
     return { label: ELEMENT_TEMPLATES[key].label, action: function(){ addElement(key); } };
   });
   items.push({ separator: true });
-  items.push({ label: '🖼 Imagem…', action: function(){ document.getElementById('imageInput').click(); } });
+  items.push({ label: 'Imagem…', action: function(){ document.getElementById('imageInput').click(); } });
   showContextMenu(x, y, items);
 }
 
@@ -1453,21 +2360,82 @@ function addImageFromFile(file){
   reader.readAsDataURL(file);
 }
 
+// ---------- group / ungroup ----------
+
+function groupSelection(){
+  const items = effectiveSelection();
+  if(items.length < 2) return;
+  const doc = getDoc();
+  items.forEach(ensureAbsolute);
+  const rects = items.map(function(el){ return { el: el, r: elRectToStage(el) }; });
+  const minLeft = Math.min.apply(null, rects.map(function(i){ return i.r.left; }));
+  const minTop = Math.min.apply(null, rects.map(function(i){ return i.r.top; }));
+  const maxRight = Math.max.apply(null, rects.map(function(i){ return i.r.left + i.r.width; }));
+  const maxBottom = Math.max.apply(null, rects.map(function(i){ return i.r.top + i.r.height; }));
+  const bodyRect = elRectToStage(doc.body);
+
+  const group = doc.createElement('div');
+  group.dataset.aeGroup = '1';
+  group.style.position = 'absolute';
+  group.style.left = (minLeft - bodyRect.left) + 'px';
+  group.style.top = (minTop - bodyRect.top) + 'px';
+  group.style.width = (maxRight - minLeft) + 'px';
+  group.style.height = (maxBottom - minTop) + 'px';
+  doc.body.appendChild(group);
+
+  rects.forEach(function(item){
+    group.appendChild(item.el);
+    item.el.style.left = (item.r.left - minLeft) + 'px';
+    item.el.style.top = (item.r.top - minTop) + 'px';
+  });
+
+  state.multiSelect = new Set();
+  selectElement(group);
+  renderLayers();
+  pushHistory(); syncCodeFromCanvas();
+}
+
+function ungroupSelection(){
+  const el = state.selected;
+  if(!el || el.dataset.aeGroup !== '1') return;
+  const parent = el.parentElement;
+  const children = Array.from(el.children);
+  children.forEach(function(child){
+    const r = elRectToStage(child);
+    parent.insertBefore(child, el);
+    if(isFreeform(child)){
+      const pRect = elRectToStage(parent);
+      child.style.left = (r.left - pRect.left) + 'px';
+      child.style.top = (r.top - pRect.top) + 'px';
+    }
+  });
+  el.remove();
+  state.multiSelect = new Set(children.slice(0, -1));
+  selectElement(children[children.length - 1] || null);
+  renderLayers();
+  pushHistory(); syncCodeFromCanvas();
+}
+
 // ---------- duplicate / delete ----------
 
 function duplicateSelected(){
   if(state.artboardMode){ const a = activeArtboard(); if(a) duplicateArtboard(a); return; }
-  const el = state.selected;
-  if(!el) return;
-  const clone = el.cloneNode(true);
-  el.parentNode.insertBefore(clone, el.nextSibling);
-  if(isFreeform(el)){
-    const left = (parseFloat(el.style.left) || 0) + 20;
-    const top = (parseFloat(el.style.top) || 0) + 20;
-    clone.style.left = left + 'px'; clone.style.top = top + 'px';
-  }
-  selectElement(clone);
-  renderLayers();
+  const items = effectiveSelection();
+  if(!items.length) return;
+  const clones = items.map(function(el){
+    const clone = el.cloneNode(true);
+    el.parentNode.insertBefore(clone, el.nextSibling);
+    if(isFreeform(el)){
+      const left = (parseFloat(el.style.left) || 0) + 20;
+      const top = (parseFloat(el.style.top) || 0) + 20;
+      clone.style.left = left + 'px'; clone.style.top = top + 'px';
+    }
+    return clone;
+  });
+  state.multiSelect = new Set(clones.slice(0, -1));
+  state.selected = clones[clones.length - 1];
+  state.artboardMode = false;
+  renderOverlay(); renderProps(); renderLayers();
   pushHistory(); syncCodeFromCanvas();
 }
 
@@ -1477,10 +2445,10 @@ async function deleteSelected(){
     if(a && await showConfirm('Excluir o artboard "' + a.name + '"? Essa ação não pode ser desfeita.', 'Excluir artboard', true)) deleteArtboard(a);
     return;
   }
-  const el = state.selected;
-  if(!el) return;
+  const items = effectiveSelection();
+  if(!items.length) return;
   selectElement(null);
-  el.remove();
+  items.forEach(function(el){ el.remove(); });
   renderLayers();
   pushHistory(); syncCodeFromCanvas();
 }
@@ -1499,6 +2467,7 @@ function serializeProject(){
 function saveProjectAs(name){
   downloadFile(name + '.json', serializeProject(), 'application/json');
   state.currentProject = name;
+  recordRecentProject(name);
 }
 
 function openProjectFromFile(file){
@@ -1516,6 +2485,7 @@ function openProjectFromFile(file){
     });
     if(!first) first = createArtboard({});
     setActiveArtboard(first.id);
+    setTimeout(function(){ recordRecentProject(state.currentProject); }, 200);
   };
   reader.readAsText(file);
 }
@@ -1526,11 +2496,19 @@ function clearAllArtboards(){
   state.activeId = null; state.selected = null; state.artboardMode = false;
 }
 
+document.getElementById('layersSearch').addEventListener('input', function(){
+  state.layersFilter = this.value.trim().toLowerCase();
+  renderLayers();
+  highlightLayerRow();
+});
+
 // ---------- toolbar wiring ----------
 
+// the preset picker moved out of the toolbar (Fase 13) — a new artboard
+// just starts at the usual desktop size now; resize it from its own
+// Properties panel (Tamanho da tela) same as any existing artboard.
 function nextArtboardSize(){
-  const v = document.getElementById('artboardPreset').value.split('x').map(Number);
-  return { w: v[0], h: v[1] };
+  return { w: 1440, h: 900 };
 }
 
 document.getElementById('btnNew').addEventListener('click', function(){
@@ -1582,6 +2560,124 @@ function extractCSSFromDoc(doc){
   return Array.from(doc.querySelectorAll('style')).map(function(s){ return s.textContent; }).join('\n\n');
 }
 
+// wraps the artboard's document in an SVG <foreignObject> so it can be
+// rasterized to PNG (or saved as-is as an .svg). Doesn't capture anything
+// loaded across origins that the browser refuses to draw into a canvas
+// (e.g. remote images without CORS) — those come through blank.
+function buildExportSVG(ab){
+  let doc; try { doc = ab.dom.frame.contentDocument; } catch(e){ doc = null; }
+  if(!doc) return null;
+  const clone = doc.documentElement.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+  ['data-ae-name', 'data-ae-locked', 'data-ae-group', 'data-ae-goto'].forEach(function(attr){
+    clone.querySelectorAll('[' + attr + ']').forEach(function(n){ n.removeAttribute(attr); });
+  });
+  const xhtml = new XMLSerializer().serializeToString(clone);
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="' + ab.w + '" height="' + ab.h + '" viewBox="0 0 ' + ab.w + ' ' + ab.h + '">' +
+    '<foreignObject width="100%" height="100%">' + xhtml + '</foreignObject></svg>';
+}
+
+function exportArtboardSVG(ab){
+  const svg = buildExportSVG(ab);
+  if(!svg){ showAlert('Não consegui ler o conteúdo desse artboard.'); return; }
+  downloadFile((ab.name || 'artifact') + '.svg', svg, 'image/svg+xml');
+}
+
+// blob: URLs make Chrome treat the drawn SVG as tainted the moment it
+// contains a <foreignObject> (regardless of same-origin), which throws on
+// toBlob/toDataURL — a base64 data: URI avoids that entirely.
+function svgToDataUri(svg){
+  return 'data:image/svg+xml;charset=utf-8;base64,' + btoa(unescape(encodeURIComponent(svg)));
+}
+
+function exportArtboardPNG(ab){
+  const svg = buildExportSVG(ab);
+  if(!svg){ showAlert('Não consegui ler o conteúdo desse artboard.'); return; }
+  const img = new Image();
+  img.onload = function(){
+    const canvas = document.createElement('canvas');
+    canvas.width = ab.w; canvas.height = ab.h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, ab.w, ab.h);
+    try {
+      ctx.drawImage(img, 0, 0, ab.w, ab.h);
+      canvas.toBlob(function(pngBlob){
+        if(!pngBlob){ showAlert('Não consegui gerar o PNG desse artboard — tenta exportar como .html.'); return; }
+        const pngUrl = URL.createObjectURL(pngBlob);
+        const a = document.createElement('a');
+        a.href = pngUrl; a.download = (ab.name || 'artifact') + '.png';
+        a.click();
+        URL.revokeObjectURL(pngUrl);
+      }, 'image/png');
+    } catch(err){
+      showAlert('Não consegui gerar o PNG desse artboard (o navegador recusou desenhar algo nele) — tenta exportar como .html.');
+    }
+  };
+  img.onerror = function(){
+    showAlert('Não consegui gerar o PNG desse artboard (o navegador recusou desenhar algo nele) — tenta exportar como .html.');
+  };
+  img.src = svgToDataUri(svg);
+}
+
+// small preview image (data URL) of an artboard, for the recent-projects
+// gallery — same SVG->canvas technique as PNG export, just tiny and async.
+function captureThumbnail(ab){
+  return new Promise(function(resolve){
+    const svg = buildExportSVG(ab);
+    if(!svg){ resolve(null); return; }
+    const img = new Image();
+    const w = 320, h = Math.round(320 * (ab.h / ab.w));
+    img.onload = function(){
+      try{
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.72));
+      } catch(err){ resolve(null); }
+    };
+    img.onerror = function(){ resolve(null); };
+    img.src = svgToDataUri(svg);
+  });
+}
+
+// ---------- recent projects (localStorage, thumbnail-only — the browser
+// won't let us remember an actual file path for security reasons, so
+// clicking one just opens the file picker again) ----------
+
+function loadRecentProjects(){
+  try { return JSON.parse(localStorage.getItem('ae_recent_projects') || '[]'); } catch(e){ return []; }
+}
+async function recordRecentProject(name){
+  const a = activeArtboard();
+  const thumbnail = a ? await captureThumbnail(a) : null;
+  let list = loadRecentProjects().filter(function(p){ return p.name !== name; });
+  list.unshift({ name: name, thumbnail: thumbnail, savedAt: Date.now() });
+  list = list.slice(0, 8);
+  try { localStorage.setItem('ae_recent_projects', JSON.stringify(list)); } catch(e){ /* storage full — skip */ }
+}
+function renderRecentProjects(){
+  const grid = document.getElementById('recentProjectsGrid');
+  const list = loadRecentProjects();
+  if(!list.length){ grid.innerHTML = '<div class="recentEmpty">Nenhum projeto recente ainda — salve ou abra um pra aparecer aqui.</div>'; return; }
+  grid.innerHTML = '';
+  list.forEach(function(p){
+    const card = document.createElement('button');
+    card.className = 'recentCard';
+    const date = new Date(p.savedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    card.innerHTML =
+      (p.thumbnail ? '<img class="thumb" src="' + p.thumbnail + '">' : '<div class="thumb"></div>') +
+      '<div class="info"><div class="name">' + p.name + '</div><div class="date">' + date + '</div></div>';
+    card.addEventListener('click', function(){
+      document.getElementById('recentProjectsOverlay').classList.remove('open');
+      document.getElementById('projectFileInput').click();
+    });
+    grid.appendChild(card);
+  });
+}
+
 document.getElementById('btnExport').addEventListener('click', function(e){
   e.stopPropagation();
   const a = activeArtboard();
@@ -1598,7 +2694,10 @@ document.getElementById('btnExport').addEventListener('click', function(e){
     { label: 'Apenas CSS', action: function(){
       let doc; try { doc = a.dom.frame.contentDocument; } catch(err){ doc = null; }
       downloadFile(base + '.css', doc ? extractCSSFromDoc(doc) : '', 'text/css');
-    } }
+    } },
+    { separator: true },
+    { label: 'Imagem PNG', action: function(){ exportArtboardPNG(a); } },
+    { label: 'Imagem SVG', action: function(){ exportArtboardSVG(a); } }
   ]);
 });
 
@@ -1618,6 +2717,16 @@ document.getElementById('projectFileInput').addEventListener('change', function(
   if(file) openProjectFromFile(file);
   e.target.value = '';
 });
+document.getElementById('btnRecentProjects').addEventListener('click', function(){
+  renderRecentProjects();
+  document.getElementById('recentProjectsOverlay').classList.add('open');
+});
+document.getElementById('recentProjectsClose').addEventListener('click', function(){
+  document.getElementById('recentProjectsOverlay').classList.remove('open');
+});
+document.getElementById('recentProjectsOverlay').addEventListener('click', function(e){
+  if(e.target === this) this.classList.remove('open');
+});
 
 document.getElementById('modeEdit').addEventListener('click', function(){ setMode(true); });
 document.getElementById('modePreview').addEventListener('click', function(){ setMode(false); });
@@ -1625,19 +2734,40 @@ function setMode(edit){
   state.editMode = edit;
   document.getElementById('modeEdit').classList.toggle('active', edit);
   document.getElementById('modePreview').classList.toggle('active', !edit);
-  if(!edit){ state.selected = null; state.artboardMode = false; }
+  if(!edit){ state.selected = null; state.multiSelect = new Set(); state.artboardMode = false; }
   renderOverlay();
 }
 
 document.getElementById('btnUndo').addEventListener('click', undo);
 document.getElementById('btnRedo').addEventListener('click', redo);
-document.getElementById('btnDup').addEventListener('click', duplicateSelected);
-document.getElementById('btnDelete').addEventListener('click', deleteSelected);
+// Duplicar/Excluir dropped from the toolbar (Fase 13) — still reachable via
+// Ctrl+D / Del, the X on a layer row, and the right-click menu.
 
 document.getElementById('addElementBtn').addEventListener('click', function(e){
   e.stopPropagation();
   const r = e.target.getBoundingClientRect();
   showAddElementMenu(r.left, r.bottom + 4);
+});
+document.getElementById('btnStylePainter').addEventListener('click', function(e){
+  e.stopPropagation();
+  if(state.stylePainter.active){ setStylePainterActive(false); return; }
+  // capture from whatever is already selected — select the source first,
+  // then press this button, then click the target(s) to paste onto them.
+  if(!state.selected || state.artboardMode){ showAlert('Selecione o elemento de origem primeiro, depois clique em "Copiar estilo".'); return; }
+  const doc = getDoc();
+  const cs = doc.defaultView.getComputedStyle(state.selected);
+  const props = {};
+  STYLE_PAINT_PROPS.forEach(function(p){ props[p] = cs[p]; });
+  state.stylePainter.active = true;
+  state.stylePainter.props = props;
+  document.getElementById('btnStylePainter').classList.add('active');
+  document.getElementById('btnStylePainter').textContent = 'Clique pra aplicar (Esc pra sair)';
+  flashPicked(state.selected);
+});
+document.getElementById('btnIcons').addEventListener('click', function(e){
+  e.stopPropagation();
+  const r = e.target.getBoundingClientRect();
+  showIconMenu(r.left, r.bottom + 4);
 });
 document.getElementById('imageInput').addEventListener('change', function(e){
   const file = e.target.files[0];
@@ -1645,15 +2775,77 @@ document.getElementById('imageInput').addEventListener('change', function(e){
   e.target.value = '';
 });
 
-document.getElementById('zoomIn').addEventListener('click', function(){ state.zoom = Math.min(3, state.zoom + 0.1); applyZoom(); renderOverlay(); });
-document.getElementById('zoomOut').addEventListener('click', function(){ state.zoom = Math.max(0.1, state.zoom - 0.1); applyZoom(); renderOverlay(); });
-document.getElementById('zoomReset').addEventListener('click', function(){ state.zoom = 1; applyZoom(); renderOverlay(); });
-canvasWrap.addEventListener('wheel', function(e){
+function zoomBy(delta){
+  state.zoom = Math.max(0.1, Math.min(3, state.zoom + delta));
+  applyZoom(); renderOverlay();
+}
+function onCanvasWheel(e){
   if(!e.ctrlKey) return;
   e.preventDefault();
-  state.zoom = Math.max(0.1, Math.min(3, state.zoom + (e.deltaY < 0 ? 0.05 : -0.05)));
-  applyZoom(); renderOverlay();
-}, { passive: false });
+  zoomBy(e.deltaY < 0 ? 0.05 : -0.05);
+}
+document.getElementById('zoomIn').addEventListener('click', function(){ zoomBy(0.1); });
+document.getElementById('zoomOut').addEventListener('click', function(){ zoomBy(-0.1); });
+document.getElementById('zoomReset').addEventListener('click', function(){ state.zoom = 1; applyZoom(); renderOverlay(); });
+canvasWrap.addEventListener('wheel', onCanvasWheel, { passive: false });
+
+// ---------- side panels: collapse toggle + drag-to-resize (Fase 13) ----------
+
+function bindPanelToggle(btnId, panelId){
+  const btn = document.getElementById(btnId);
+  const panel = document.getElementById(panelId);
+  btn.addEventListener('click', function(){
+    const hidden = panel.classList.toggle('collapsed');
+    btn.classList.toggle('active', !hidden);
+    try { localStorage.setItem('ae_' + panelId + '_collapsed', hidden ? '1' : '0'); } catch(e){}
+  });
+  try {
+    if(localStorage.getItem('ae_' + panelId + '_collapsed') === '1'){
+      panel.classList.add('collapsed');
+      btn.classList.remove('active');
+    }
+  } catch(e){}
+}
+bindPanelToggle('btnToggleLayers', 'layersPanel');
+bindPanelToggle('btnToggleProps', 'propsPanel');
+
+function bindPanelResize(handleId, panelId, fromRightEdge){
+  const handle = document.getElementById(handleId);
+  const panel = document.getElementById(panelId);
+  handle.addEventListener('mousedown', function(e){
+    if(e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX, startW = panel.getBoundingClientRect().width;
+    handle.classList.add('dragging');
+    // dragging past the panel edge crosses over an artboard iframe, and a
+    // window-only mousemove listener stops getting events once the cursor
+    // is over one (same root cause as the old element-drag bug) — a
+    // full-viewport capture overlay on top of everything sidesteps that.
+    const capture = document.createElement('div');
+    capture.style.cssText = 'position:fixed; inset:0; z-index:9999; cursor:col-resize;';
+    document.body.appendChild(capture);
+    function onMove(ev){
+      const dx = ev.clientX - startX;
+      const w = Math.max(180, Math.min(520, startW + (fromRightEdge ? dx : -dx)));
+      panel.style.width = w + 'px';
+    }
+    function onUp(){
+      handle.classList.remove('dragging');
+      capture.remove();
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      try { localStorage.setItem('ae_' + panelId + '_width', panel.style.width); } catch(e){}
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+  try {
+    const saved = localStorage.getItem('ae_' + panelId + '_width');
+    if(saved) panel.style.width = saved;
+  } catch(e){}
+}
+bindPanelResize('layersResizeHandle', 'layersPanel', true);
+bindPanelResize('propsResizeHandle', 'propsPanel', false);
 
 document.getElementById('btnCode').addEventListener('click', function(){
   codePanel.classList.toggle('open');
@@ -1675,7 +2867,7 @@ document.getElementById('btnTheme').addEventListener('click', function(){
 // click on empty canvas (not on any artboard) clears selection entirely
 canvasWrap.addEventListener('mousedown', function(e){
   if(e.target === canvasWrap || e.target === artboardsRow){
-    state.selected = null; state.artboardMode = false;
+    state.selected = null; state.multiSelect = new Set(); state.artboardMode = false;
     artboards.forEach(function(a){ a.dom.wrap.classList.remove('selected'); });
     renderOverlay(); renderProps(); highlightLayerRow();
   }
@@ -1743,12 +2935,31 @@ function handleGlobalKeydown(e, activeDoc){
   else if(e.ctrlKey && e.key.toLowerCase() === 'v'){ if(clipboardEl){ e.preventDefault(); pasteClipboard(); } }
   else if(e.ctrlKey && e.key.toLowerCase() === 's'){ e.preventDefault(); document.getElementById('btnSave').click(); }
   else if(e.key === 'Delete' || e.key === 'Backspace'){ if(state.selected || state.artboardMode){ e.preventDefault(); deleteSelected(); } }
-  else if(e.key === 'Escape'){ state.selected = null; state.artboardMode = false; renderOverlay(); renderProps(); highlightLayerRow(); }
+  else if(e.key === 'Escape'){
+    if(state.stylePainter.active) setStylePainterActive(false);
+    state.selected = null; state.multiSelect = new Set(); state.artboardMode = false;
+    renderOverlay(); renderProps(); highlightLayerRow();
+  }
+  else if(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.key) !== -1 && state.selected && !state.artboardMode){
+    if(!isFreeform(state.selected)) return;
+    e.preventDefault();
+    const el = state.selected;
+    const step = e.shiftKey ? 10 : 1;
+    let left = parseFloat(el.style.left) || 0, top = parseFloat(el.style.top) || 0;
+    if(e.key === 'ArrowUp') top -= step;
+    else if(e.key === 'ArrowDown') top += step;
+    else if(e.key === 'ArrowLeft') left -= step;
+    else if(e.key === 'ArrowRight') left += step;
+    el.style.left = Math.max(0, left) + 'px';
+    el.style.top = Math.max(0, top) + 'px';
+    updateOverlayLive();
+    clearTimeout(nudgeDebounce);
+    nudgeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+  }
 }
+let nudgeDebounce;
 
-document.addEventListener('keydown', function(e){ handleGlobalKeydown(e, document); if(e.key === 'Shift') setAltCursor(true); });
-document.addEventListener('keyup', function(e){ if(e.key === 'Shift') setAltCursor(false); });
-window.addEventListener('blur', function(){ setAltCursor(false); });
+document.addEventListener('keydown', function(e){ handleGlobalKeydown(e, document); });
 window.addEventListener('resize', updateOverlayLive);
 
 // ---------- modal (replaces prompt/confirm/alert) ----------
@@ -1884,6 +3095,28 @@ function elementContextMenuItems(el){
     items.push({ separator: true });
     items.push({ label: '+ Adicionar item', action: function(){ addListItem(list); } });
   }
+  const selCount = effectiveSelection().length;
+  if(selCount >= 2){
+    items.push({ separator: true });
+    items.push({ label: '⟸ Alinhar à esquerda', action: function(){ alignSelection('left'); } });
+    items.push({ label: '⟺ Centralizar horizontal', action: function(){ alignSelection('hcenter'); } });
+    items.push({ label: '⟹ Alinhar à direita', action: function(){ alignSelection('right'); } });
+    items.push({ label: '⟰ Alinhar ao topo', action: function(){ alignSelection('top'); } });
+    items.push({ label: '⟺ Centralizar vertical', action: function(){ alignSelection('vcenter'); } });
+    items.push({ label: '⟱ Alinhar à base', action: function(){ alignSelection('bottom'); } });
+    if(selCount >= 3){
+      items.push({ label: 'Distribuir horizontal', action: function(){ distributeSelection('h'); } });
+      items.push({ label: 'Distribuir vertical', action: function(){ distributeSelection('v'); } });
+    }
+    items.push({ label: 'Agrupar', action: groupSelection });
+  }
+  if(el.dataset.aeGroup === '1'){
+    items.push({ separator: true });
+    items.push({ label: 'Desagrupar', action: ungroupSelection });
+  }
+  items.push({ separator: true });
+  items.push({ label: 'Trazer para frente', action: function(){ bringToFront(el); } });
+  items.push({ label: 'Enviar para trás', action: function(){ sendToBack(el); } });
   items.push({ separator: true });
   items.push({ label: 'Duplicar', action: duplicateSelected });
   items.push({ label: 'Copiar', action: copySelected });
@@ -1891,7 +3124,7 @@ function elementContextMenuItems(el){
   items.push({ separator: true });
   items.push({ label: 'Renomear…', action: function(){ renameElementPrompt(el); } });
   items.push({ separator: true });
-  items.push({ label: 'Excluir', danger: true, action: deleteSelected });
+  items.push({ label: 'Excluir' + (selCount > 1 ? ' (' + selCount + ')' : ''), danger: true, action: deleteSelected });
   return items;
 }
 
@@ -1905,6 +3138,535 @@ function artboardContextMenuItems(ab){
     { label: 'Excluir artboard', danger: true, action: function(){ deleteArtboard(ab); } }
   ];
 }
+
+// ---------- FASE 08: Editor de CSS Estruturado & Biblioteca de Classes ----------
+
+let activeCssClass = null;
+let cssClassSearchFilter = '';
+
+function getAllClassRules(doc){
+  const cssText = getStyleText(doc);
+  const rulesMap = new Map();
+  const re = /\.([a-zA-Z0-9_-]+)\s*\{([\s\S]*?)\}/g;
+  let match;
+  while((match = re.exec(cssText)) !== null){
+    const className = match[1];
+    const selector = '.' + className;
+    const body = match[2].trim();
+    if(!rulesMap.has(className)){
+      let usageCount = 0;
+      try { usageCount = doc.querySelectorAll(selector).length; } catch(e){}
+      rulesMap.set(className, { selector: selector, className: className, body: body, count: usageCount });
+    }
+  }
+  return Array.from(rulesMap.values());
+}
+
+// the class library spans every artboard, not just the active one — this is
+// what actually lets a class made on one screen get reused on another
+// without retyping its CSS (each artboard's <style> is otherwise its own
+// isolated document, so without this a "library" would just be a list of
+// whatever happens to already be in the artboard you're looking at).
+function getAllClassRulesAcrossArtboards(){
+  const map = new Map();
+  artboards.forEach(function(ab){
+    let doc; try { doc = ab.dom.frame.contentDocument; } catch(e){ doc = null; }
+    if(!doc) return;
+    getAllClassRules(doc).forEach(function(rule){
+      let entry = map.get(rule.className);
+      if(!entry){
+        entry = { className: rule.className, body: rule.body, count: 0, artboardNames: [] };
+        map.set(rule.className, entry);
+      }
+      entry.count += rule.count;
+      entry.artboardNames.push(ab.name);
+    });
+  });
+  return Array.from(map.values()).sort(function(a, b){ return a.className.localeCompare(b.className); });
+}
+
+// copies a class's rule body into the active artboard's <style> if it isn't
+// defined there yet, sourcing it from wherever else in the project it
+// already exists — the "reuse without rewriting CSS" part of the library.
+function ensureClassRuleInActiveDoc(className){
+  const doc = getDoc();
+  if(!doc || !className) return;
+  if(findRuleBlock(getStyleText(doc), '.' + className)) return;
+  const found = getAllClassRulesAcrossArtboards().find(function(r){ return r.className === className; });
+  if(found) setClassRuleBody(doc, '.' + className, found.body);
+}
+
+function getRootVariables(doc){
+  const cssText = getStyleText(doc);
+  const found = findRuleBlock(cssText, ':root');
+  if(!found) return [];
+  const vars = [];
+  const lines = found.body.split(';');
+  lines.forEach(function(l){
+    const parts = l.split(':');
+    if(parts.length >= 2){
+      const name = parts[0].trim();
+      const val = parts.slice(1).join(':').trim();
+      if(name.startsWith('--')){
+        vars.push({ name: name, value: val });
+      }
+    }
+  });
+  return vars;
+}
+
+function varDropdownHTML(doc, currentVal, selectId){
+  const vars = getRootVariables(doc);
+  if(!vars.length) return '';
+  let options = '<option value="">(Cor / Custom)</option>';
+  vars.forEach(function(v){
+    const vStr = 'var(' + v.name + ')';
+    const sel = (currentVal || '').indexOf(v.name) !== -1;
+    options += '<option value="' + vStr + '"' + (sel ? ' selected' : '') + '>' + v.name + '</option>';
+  });
+  return '<select id="' + selectId + '" style="max-width:115px; font-size:11px; padding:2px 4px;" title="Usar variável do :root">' + options + '</select>';
+}
+
+function setRootVariable(doc, varName, value){
+  const cssText = getStyleText(doc);
+  const found = findRuleBlock(cssText, ':root');
+  let vars = getRootVariables(doc);
+  const existing = vars.find(function(v){ return v.name === varName; });
+  if(existing){ existing.value = value; }
+  else { vars.push({ name: varName, value: value }); }
+
+  const newBody = vars.map(function(v){ return v.name + ': ' + v.value + ';'; }).join('\n  ');
+  const block = ':root {\n  ' + newBody + '\n}';
+  const updated = found
+    ? cssText.slice(0, found.index) + block + cssText.slice(found.index + found.full.length)
+    : block + '\n\n' + cssText;
+  setStyleText(doc, updated);
+}
+
+function deleteRootVariable(doc, varName){
+  const cssText = getStyleText(doc);
+  const found = findRuleBlock(cssText, ':root');
+  if(!found) return;
+  let vars = getRootVariables(doc).filter(function(v){ return v.name !== varName; });
+  if(!vars.length){
+    setStyleText(doc, cssText.slice(0, found.index) + cssText.slice(found.index + found.full.length).trim());
+  } else {
+    const newBody = vars.map(function(v){ return v.name + ': ' + v.value + ';'; }).join('\n  ');
+    const block = ':root {\n  ' + newBody + '\n}';
+    setStyleText(doc, cssText.slice(0, found.index) + block + cssText.slice(found.index + found.full.length));
+  }
+}
+
+function deleteClassRule(doc, selector){
+  let cssText = getStyleText(doc);
+  let found;
+  while((found = findRuleBlock(cssText, selector)) !== null){
+    cssText = cssText.slice(0, found.index) + cssText.slice(found.index + found.full.length).trim();
+  }
+  setStyleText(doc, cssText);
+}
+
+function parseCssDeclarations(bodyText){
+  const map = {};
+  if(!bodyText) return map;
+  const lines = bodyText.split(';');
+  lines.forEach(function(line){
+    const colonIdx = line.indexOf(':');
+    if(colonIdx !== -1){
+      const key = line.slice(0, colonIdx).trim().toLowerCase();
+      const val = line.slice(colonIdx + 1).trim();
+      if(key) map[key] = val;
+    }
+  });
+  return map;
+}
+
+function renderCssEditorModal(){
+  const doc = getDoc();
+  if(!doc) return;
+
+  // the class picked from the sidebar may live in another artboard's
+  // stylesheet only — pull it into this artboard before editing/using it.
+  if(activeCssClass) ensureClassRuleInActiveDoc(activeCssClass);
+
+  // Render Class Library List — spans every artboard in the project, not
+  // just the active one, so a class made anywhere shows up as reusable here.
+  const classListContainer = document.getElementById('cssClassList');
+  const libraryRules = getAllClassRulesAcrossArtboards();
+  const localClassNames = new Set(getAllClassRules(doc).map(function(r){ return r.className; }));
+  const filtered = libraryRules.filter(function(r){
+    return !cssClassSearchFilter || r.className.toLowerCase().includes(cssClassSearchFilter);
+  });
+
+  if(!activeCssClass && filtered.length > 0){
+    activeCssClass = filtered[0].className;
+    ensureClassRuleInActiveDoc(activeCssClass);
+  } else if(activeCssClass && !libraryRules.some(function(r){ return r.className === activeCssClass; })){
+    activeCssClass = filtered.length > 0 ? filtered[0].className : null;
+  }
+
+  classListContainer.innerHTML = '';
+  if(!filtered.length){
+    classListContainer.innerHTML = '<div style="color:var(--text-dim); font-size:12px; padding:12px; text-align:center;">Nenhuma classe encontrada.</div>';
+  } else {
+    filtered.forEach(function(rule){
+      const item = document.createElement('div');
+      const isLocal = localClassNames.has(rule.className);
+      item.className = 'css-class-item' + (rule.className === activeCssClass ? ' active' : '');
+      item.innerHTML = '<span class="class-name">.' + rule.className + '</span>' +
+        (isLocal ? '' : '<span class="class-badge" title="Definida em: ' + rule.artboardNames.join(', ') + ' — clique pra reaproveitar aqui">outro artboard</span>') +
+        '<span class="class-count">' + rule.count + ' uso' + (rule.count !== 1 ? 's' : '') + '</span>';
+      item.addEventListener('click', function(){
+        activeCssClass = rule.className;
+        ensureClassRuleInActiveDoc(rule.className);
+        renderCssEditorModal();
+      });
+      classListContainer.appendChild(item);
+    });
+  }
+
+  // Render Form for Active Class — always edits the copy in the active
+  // artboard's own stylesheet (ensureClassRuleInActiveDoc above guarantees
+  // one exists there by this point).
+  const formContainer = document.getElementById('cssClassFormContainer');
+  const rules = getAllClassRules(doc);
+  if(!activeCssClass){
+    formContainer.innerHTML = '<div class="css-empty-state">Selecione ou crie uma classe na lista ao lado para editar suas propriedades.</div>';
+  } else {
+    const activeRule = rules.find(function(r){ return r.className === activeCssClass; }) || { selector: '.' + activeCssClass, className: activeCssClass, body: '' };
+    const decls = parseCssDeclarations(activeRule.body);
+
+    function getVal(prop){ return decls[prop] || ''; }
+    function hexVal(prop){
+      const v = decls[prop] || '';
+      return v.startsWith('#') ? v : (v ? rgbToHex(v) : '#000000');
+    }
+
+    formContainer.innerHTML =
+      '<div class="css-class-header-bar">' +
+        '<h3>.' + activeCssClass + '</h3>' +
+        '<div class="css-class-actions">' +
+          (state.selected ? '<button type="button" class="miniBtn primary" id="btnApplyClassToSelected" title="Adiciona esta classe ao elemento atualmente selecionado">+ Aplicar ao elemento</button>' : '') +
+          '<button type="button" class="miniBtn danger" id="btnDeleteCssClass">Excluir classe</button>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="css-section-title">Tipografia</div>' +
+      '<div class="row2">' +
+        '<div class="field"><label>Família da fonte</label><input type="text" id="css_font_family" value="' + getVal('font-family').replace(/"/g, '&quot;') + '" placeholder="ex: Inter, sans-serif"></div>' +
+        '<div class="field"><label>Tamanho (font-size)</label><input type="text" id="css_font_size" value="' + getVal('font-size') + '" placeholder="ex: 16px"></div>' +
+      '</div>' +
+      '<div class="row2">' +
+        '<div class="field"><label>Peso (font-weight)</label><input type="text" id="css_font_weight" value="' + getVal('font-weight') + '" placeholder="ex: 600, bold"></div>' +
+        '<div class="field"><label>Cor do texto</label><div class="fieldRow" style="display:flex; gap:4px;"><input type="color" id="css_color" value="' + hexVal('color') + '">' + varDropdownHTML(doc, getVal('color'), 'css_color_var') + '</div></div>' +
+      '</div>' +
+
+      '<div class="css-section-title">Fundo &amp; Superfície</div>' +
+      '<div class="row2">' +
+        '<div class="field"><label>Cor de fundo</label><div class="fieldRow" style="display:flex; gap:4px;"><input type="color" id="css_bg_color" value="' + hexVal('background-color') + '">' + varDropdownHTML(doc, getVal('background-color'), 'css_bg_color_var') + '</div></div>' +
+        '<div class="field"><label>Cantos (border-radius)</label><input type="text" id="css_border_radius" value="' + getVal('border-radius') + '" placeholder="ex: 8px"></div>' +
+      '</div>' +
+      '<div class="field"><label>Sombra (box-shadow)</label><input type="text" id="css_box_shadow" value="' + getVal('box-shadow').replace(/"/g, '&quot;') + '" placeholder="ex: 0 4px 12px rgba(0,0,0,0.1)"></div>' +
+
+      '<div class="css-section-title">Espaçamento (Padding &amp; Margin)</div>' +
+      '<div class="row4">' +
+        '<div class="field"><label>Pad T</label><input type="text" id="css_pad_t" value="' + getVal('padding-top') + '" placeholder="0"></div>' +
+        '<div class="field"><label>Pad R</label><input type="text" id="css_pad_r" value="' + getVal('padding-right') + '" placeholder="0"></div>' +
+        '<div class="field"><label>Pad B</label><input type="text" id="css_pad_b" value="' + getVal('padding-bottom') + '" placeholder="0"></div>' +
+        '<div class="field"><label>Pad L</label><input type="text" id="css_pad_l" value="' + getVal('padding-left') + '" placeholder="0"></div>' +
+      '</div>' +
+      '<div class="row4">' +
+        '<div class="field"><label>Mar T</label><input type="text" id="css_mar_t" value="' + getVal('margin-top') + '" placeholder="0"></div>' +
+        '<div class="field"><label>Mar R</label><input type="text" id="css_mar_r" value="' + getVal('margin-right') + '" placeholder="0"></div>' +
+        '<div class="field"><label>Mar B</label><input type="text" id="css_mar_b" value="' + getVal('margin-bottom') + '" placeholder="0"></div>' +
+        '<div class="field"><label>Mar L</label><input type="text" id="css_mar_l" value="' + getVal('margin-left') + '" placeholder="0"></div>' +
+      '</div>' +
+
+      '<div class="css-section-title">Layout &amp; Tamanho</div>' +
+      '<div class="row2">' +
+        '<div class="field"><label>Display</label><input type="text" id="css_display" value="' + getVal('display') + '" placeholder="ex: flex, block"></div>' +
+        '<div class="field"><label>Gap</label><input type="text" id="css_gap" value="' + getVal('gap') + '" placeholder="ex: 12px"></div>' +
+      '</div>' +
+      '<div class="row2">' +
+        '<div class="field"><label>Largura (width)</label><input type="text" id="css_width" value="' + getVal('width') + '" placeholder="ex: 100%, 300px"></div>' +
+        '<div class="field"><label>Altura (height)</label><input type="text" id="css_height" value="' + getVal('height') + '" placeholder="ex: auto, 50px"></div>' +
+      '</div>' +
+
+      '<div class="css-section-title">Borda</div>' +
+      '<div class="row3">' +
+        '<div class="field"><label>Espessura</label><input type="text" id="css_border_w" value="' + getVal('border-width') + '" placeholder="1px"></div>' +
+        '<div class="field"><label>Estilo</label><input type="text" id="css_border_s" value="' + getVal('border-style') + '" placeholder="solid"></div>' +
+        '<div class="field"><label>Cor</label><div class="fieldRow" style="display:flex; gap:4px;"><input type="color" id="css_border_c" value="' + hexVal('border-color') + '">' + varDropdownHTML(doc, getVal('border-color'), 'css_border_c_var') + '</div></div>' +
+      '</div>' +
+
+      '<div class="css-section-title" style="display:flex; justify-content:space-between; align-items:center;">' +
+        '<span>Corpo da Regra CSS (Texto Bruto)</span>' +
+        (getRootVariables(doc).length ?
+          '<select id="cssInsertVarSelect" style="max-width:180px; font-size:11.5px; padding:2px 6px;" title="Inserir variável do :root no código">' +
+            '<option value="">+ Inserir var(:root)...</option>' +
+            getRootVariables(doc).map(function(v){ return '<option value="var(' + v.name + ')">' + v.name + ' (' + v.value + ')</option>'; }).join('') +
+          '</select>' : '') +
+      '</div>' +
+      '<div class="field"><textarea id="cssRawBody" rows="6" spellcheck="false" placeholder="background: var(--bg-dark);\ncolor: var(--primary-color);">' + activeRule.body + '</textarea></div>';
+
+    const rawTextarea = document.getElementById('cssRawBody');
+    const cssInsertVarSelect = document.getElementById('cssInsertVarSelect');
+
+    function saveCurrentClassRule(newBodyText){
+      setClassRuleBody(doc, '.' + activeCssClass, newBodyText);
+      pushHistory(); syncCodeFromCanvas(); renderProps();
+    }
+
+    if(cssInsertVarSelect){
+      cssInsertVarSelect.addEventListener('change', function(){
+        const v = this.value;
+        if(!v) return;
+        const cur = rawTextarea.value;
+        const insertText = (cur && !cur.endsWith('\n') && !cur.endsWith(' ') ? ' ' : '') + v + ';';
+        rawTextarea.value = cur + insertText;
+        saveCurrentClassRule(rawTextarea.value);
+        this.value = '';
+        renderCssEditorModal();
+      });
+    }
+
+    ['css_color_var', 'css_bg_color_var', 'css_border_c_var'].forEach(function(varId){
+      const selEl = document.getElementById(varId);
+      if(!selEl) return;
+      selEl.addEventListener('change', function(){
+        if(!this.value) return;
+        const propName = varId === 'css_color_var' ? 'color' : (varId === 'css_bg_color_var' ? 'background-color' : 'border-color');
+        decls[propName] = this.value;
+        const updatedBody = Object.keys(decls).map(function(k){ return k + ': ' + decls[k] + ';'; }).join('\n  ');
+        rawTextarea.value = updatedBody;
+        saveCurrentClassRule(updatedBody);
+        renderCssEditorModal();
+      });
+    });
+
+    rawTextarea.addEventListener('change', function(){
+      saveCurrentClassRule(this.value);
+      renderCssEditorModal();
+    });
+
+    const fieldMap = [
+      { id: 'css_font_family', prop: 'font-family' },
+      { id: 'css_font_size', prop: 'font-size' },
+      { id: 'css_font_weight', prop: 'font-weight' },
+      { id: 'css_color', prop: 'color', isColor: true },
+      { id: 'css_bg_color', prop: 'background-color', isColor: true },
+      { id: 'css_border_radius', prop: 'border-radius' },
+      { id: 'css_box_shadow', prop: 'box-shadow' },
+      { id: 'css_pad_t', prop: 'padding-top' },
+      { id: 'css_pad_r', prop: 'padding-right' },
+      { id: 'css_pad_b', prop: 'padding-bottom' },
+      { id: 'css_pad_l', prop: 'padding-left' },
+      { id: 'css_mar_t', prop: 'margin-top' },
+      { id: 'css_mar_r', prop: 'margin-right' },
+      { id: 'css_mar_b', prop: 'margin-bottom' },
+      { id: 'css_mar_l', prop: 'margin-left' },
+      { id: 'css_display', prop: 'display' },
+      { id: 'css_gap', prop: 'gap' },
+      { id: 'css_width', prop: 'width' },
+      { id: 'css_height', prop: 'height' },
+      { id: 'css_border_w', prop: 'border-width' },
+      { id: 'css_border_s', prop: 'border-style' },
+      { id: 'css_border_c', prop: 'border-color', isColor: true }
+    ];
+
+    fieldMap.forEach(function(item){
+      const input = document.getElementById(item.id);
+      if(!input) return;
+      const eventName = item.isColor ? 'input' : 'change';
+      input.addEventListener(eventName, function(){
+        const val = input.value.trim();
+        if(val) decls[item.prop] = val;
+        else delete decls[item.prop];
+
+        const updatedBody = Object.keys(decls).map(function(k){ return k + ': ' + decls[k] + ';'; }).join('\n  ');
+        rawTextarea.value = updatedBody;
+        saveCurrentClassRule(updatedBody);
+      });
+    });
+
+    const btnApply = document.getElementById('btnApplyClassToSelected');
+    if(btnApply){
+      btnApply.addEventListener('click', function(){
+        if(state.selected){
+          const currentClasses = (state.selected.className || '').trim().split(/\s+/).filter(Boolean);
+          if(!currentClasses.includes(activeCssClass)){
+            currentClasses.push(activeCssClass);
+            state.selected.className = currentClasses.join(' ');
+            pushHistory(); syncCodeFromCanvas(); renderProps();
+            renderCssEditorModal();
+          }
+        }
+      });
+    }
+
+    const btnDel = document.getElementById('btnDeleteCssClass');
+    if(btnDel){
+      btnDel.addEventListener('click', async function(){
+        if(await showConfirm('Excluir a classe .' + activeCssClass + '? Essa ação altera o estilo de todos os elementos que a usam.', 'Excluir classe CSS', true)){
+          deleteClassRule(doc, '.' + activeCssClass);
+          activeCssClass = null;
+          pushHistory(); syncCodeFromCanvas(); renderProps();
+          renderCssEditorModal();
+        }
+      });
+    }
+  }
+
+  // Render Variables Tab
+  const varListContainer = document.getElementById('cssVarList');
+  const vars = getRootVariables(doc);
+  varListContainer.innerHTML = '';
+
+  if(!vars.length){
+    varListContainer.innerHTML = '<div style="color:var(--text-dim); font-size:13px; padding:12px 0;">Nenhuma variável CSS definida em <code>:root</code>. Clique acima para criar a primeira!</div>';
+  } else {
+    vars.forEach(function(v){
+      const row = document.createElement('div');
+      row.className = 'css-var-row';
+
+      const isHex = v.value.startsWith('#') || v.value.startsWith('rgb');
+      const colorInputHTML = isHex ? '<input type="color" value="' + (v.value.startsWith('#') ? v.value : rgbToHex(v.value)) + '">' : '';
+
+      row.innerHTML =
+        '<input type="text" class="var-name" value="' + v.name + '" placeholder="--var-name">' +
+        '<input type="text" class="var-val" value="' + v.value.replace(/"/g, '&quot;') + '" placeholder="valor">' +
+        colorInputHTML +
+        '<button type="button" class="miniBtn danger var-del" title="Excluir variável">✕</button>';
+
+      const nameInput = row.querySelector('.var-name');
+      const valInput = row.querySelector('.var-val');
+      const colorInput = row.querySelector('input[type="color"]');
+      const delBtn = row.querySelector('.var-del');
+
+      nameInput.addEventListener('change', function(){
+        deleteRootVariable(doc, v.name);
+        const newName = nameInput.value.trim().startsWith('--') ? nameInput.value.trim() : '--' + nameInput.value.trim();
+        setRootVariable(doc, newName, valInput.value.trim());
+        pushHistory(); syncCodeFromCanvas(); renderProps();
+      });
+
+      valInput.addEventListener('change', function(){
+        setRootVariable(doc, nameInput.value.trim(), valInput.value.trim());
+        pushHistory(); syncCodeFromCanvas(); renderProps();
+      });
+
+      if(colorInput){
+        colorInput.addEventListener('input', function(){
+          valInput.value = colorInput.value;
+          setRootVariable(doc, nameInput.value.trim(), colorInput.value);
+          pushHistory(); syncCodeFromCanvas(); renderProps();
+        });
+      }
+
+      delBtn.addEventListener('click', function(){
+        deleteRootVariable(doc, v.name);
+        pushHistory(); syncCodeFromCanvas(); renderProps();
+        renderCssEditorModal();
+      });
+
+      varListContainer.appendChild(row);
+    });
+  }
+}
+
+// Open / Close / Wire Modal Events
+const cssEditorModal = document.getElementById('cssEditorModal');
+document.getElementById('btnCssEditor').addEventListener('click', function(){
+  cssEditorModal.style.display = 'flex';
+  renderCssEditorModal();
+});
+document.getElementById('btnCloseCssEditor').addEventListener('click', function(){
+  cssEditorModal.style.display = 'none';
+});
+
+// Modal Tabs
+document.getElementById('tabBtnClasses').addEventListener('click', function(){
+  this.classList.add('active');
+  document.getElementById('tabBtnVariables').classList.remove('active');
+  document.getElementById('cssTabClasses').classList.add('active');
+  document.getElementById('cssTabVariables').classList.remove('active');
+});
+document.getElementById('tabBtnVariables').addEventListener('click', function(){
+  this.classList.add('active');
+  document.getElementById('tabBtnClasses').classList.remove('active');
+  document.getElementById('cssTabVariables').classList.add('active');
+  document.getElementById('cssTabClasses').classList.remove('active');
+});
+
+// Search input
+document.getElementById('cssClassSearchInput').addEventListener('input', function(){
+  cssClassSearchFilter = this.value.trim().toLowerCase();
+  renderCssEditorModal();
+});
+
+// New Class Button
+document.getElementById('btnNewCssClass').addEventListener('click', async function(){
+  const name = await showPrompt('Nome da nova classe CSS (ex: card-custom ou btn-highlight):', '', 'Nova Classe CSS');
+  if(name && name.trim()){
+    const cleanName = name.trim().replace(/^\./, '').replace(/\s+/g, '-');
+    const doc = getDoc();
+    if(doc){
+      setClassRuleBody(doc, '.' + cleanName, '/* propriedades de .' + cleanName + ' */\nbackground-color: transparent;\ncolor: inherit;');
+      activeCssClass = cleanName;
+      pushHistory(); syncCodeFromCanvas(); renderProps();
+      renderCssEditorModal();
+    }
+  }
+});
+
+// New Variable Button
+document.getElementById('btnNewCssVar').addEventListener('click', async function(){
+  const name = await showPrompt('Nome da nova variável CSS (ex: --accent-color ou --card-radius):', '--', 'Nova Variável CSS');
+  if(name && name.trim()){
+    const cleanName = name.trim().startsWith('--') ? name.trim() : '--' + name.trim();
+    const doc = getDoc();
+    if(doc){
+      setRootVariable(doc, cleanName, '#35d0a4');
+      pushHistory(); syncCodeFromCanvas(); renderProps();
+      renderCssEditorModal();
+    }
+  }
+});
+
+// ---------- color popover wiring (one-time — #colorPopover is permanent DOM) ----------
+
+document.getElementById('cpHue').addEventListener('input', function(){
+  const alpha = parseInt(document.getElementById('cpAlpha').value, 10) / 100;
+  const parts = parseColorParts(this.value);
+  parts.a = alpha;
+  const rgba = partsToRgba(parts);
+  document.getElementById('cpText').value = rgba;
+  if(colorPopoverOnChange) colorPopoverOnChange(rgba);
+});
+document.getElementById('cpAlpha').addEventListener('input', function(){
+  const pct = parseInt(this.value, 10);
+  document.getElementById('cpAlphaLabel').textContent = pct + '%';
+  const parts = parseColorParts(document.getElementById('cpHue').value);
+  parts.a = pct / 100;
+  const rgba = partsToRgba(parts);
+  document.getElementById('cpText').value = rgba;
+  if(colorPopoverOnChange) colorPopoverOnChange(rgba);
+});
+document.getElementById('cpText').addEventListener('change', function(){
+  const parts = parseColorParts(this.value);
+  document.getElementById('cpHue').value = hexFromRgbParts(parts);
+  document.getElementById('cpAlpha').value = Math.round(parts.a * 100);
+  document.getElementById('cpAlphaLabel').textContent = Math.round(parts.a * 100) + '%';
+  const rgba = partsToRgba(parts);
+  this.value = rgba;
+  if(colorPopoverOnChange) colorPopoverOnChange(rgba);
+});
+document.addEventListener('mousedown', function(e){
+  const pop = document.getElementById('colorPopover');
+  if(!pop.classList.contains('open')) return;
+  if(pop.contains(e.target) || e.target.closest('.colorSwatchBtn')) return;
+  closeColorPopover();
+});
 
 // ---------- init ----------
 

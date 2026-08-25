@@ -25,43 +25,33 @@
     <input type="file" id="projectFileInput" accept=".json,application/json" style="display:none">
     <button id="btnSave" title="Salvar projeto (todos os artboards) como .json">Salvar</button>
     <button id="btnSaveAs" title="Salvar como novo arquivo .json">Salvar como</button>
+    <button id="btnRecentProjects" title="Ver projetos recentes (com miniatura)">Recentes</button>
   </div>
 
   <div class="grp">
     <button id="modeEdit" class="active" title="Modo edição: selecionar e mover elementos">Editar</button>
     <button id="modePreview" title="Modo leitura: visualizar layout">Visualizar</button>
+    <button id="btnCssEditor" title="Abrir editor de CSS estruturado e biblioteca de classes">CSS &amp; Variáveis</button>
   </div>
 
   <div class="grp">
     <button id="btnUndo" title="Desfazer (Ctrl+Z)">↶</button>
     <button id="btnRedo" title="Refazer (Ctrl+Shift+Z)">↷</button>
-    <button id="btnDup" title="Duplicar (Ctrl+D)">Duplicar</button>
-    <button id="btnDelete" title="Excluir (Del)">Excluir</button>
   </div>
 
   <div class="grp">
     <button id="addElementBtn" title="Adicionar elemento (div, texto, tabela, nav…)">+ Elemento</button>
     <input type="file" id="imageInput" accept="image/*" style="display:none">
+    <button id="btnIcons" title="Inserir ícone">◇ Ícones</button>
+    <button id="btnStylePainter" title="Copiar estilo: selecione o elemento de origem, clique aqui, depois clique nos elementos que vão receber o estilo">Copiar estilo</button>
   </div>
 
-  <div class="grp">
-    <select id="artboardPreset" title="Tamanho do próximo artboard novo">
-      <option value="1440x900">Desktop 1440×900</option>
-      <option value="1280x800">Desktop 1280×800</option>
-      <option value="768x1024">Tablet 768×1024</option>
-      <option value="375x812">Mobile 375×812</option>
-    </select>
-  </div>
-
-  <div class="grp">
-    <button id="zoomOut">−</button>
-    <span id="zoomLabel">100%</span>
-    <button id="zoomIn">+</button>
-    <button id="zoomReset">Ajustar</button>
-  </div>
+  <span class="toolbarSpacer"></span>
 
   <div class="grp">
     <button id="btnCode" title="Abrir/fechar painel de código">&lt;/&gt; Código</button>
+    <button id="btnToggleLayers" class="active" title="Mostrar/esconder painel de camadas">☰ Camadas</button>
+    <button id="btnToggleProps" class="active" title="Mostrar/esconder painel de propriedades">▤ Propriedades</button>
     <button id="btnTheme" title="Alternar tema do editor">◐</button>
   </div>
 </div>
@@ -69,7 +59,9 @@
 <div id="main">
   <div id="layersPanel">
     <div class="panelTitle">Camadas</div>
+    <input type="text" id="layersSearch" placeholder="Buscar camada…" class="layersSearchInput">
     <div id="layersTree"></div>
+    <div class="panelResizeHandle" id="layersResizeHandle"></div>
   </div>
 
   <div id="canvasArea">
@@ -87,9 +79,17 @@
       </div>
       <textarea id="codeArea" spellcheck="false"></textarea>
     </div>
+
+    <div id="bottomBar">
+      <button id="zoomOut" title="Diminuir zoom">−</button>
+      <span id="zoomLabel">100%</span>
+      <button id="zoomIn" title="Aumentar zoom">+</button>
+      <button id="zoomReset" title="Ajustar à tela">Ajustar</button>
+    </div>
   </div>
 
   <div id="propsPanel">
+    <div class="panelResizeHandle" id="propsResizeHandle"></div>
     <div class="panelTitle">Propriedades</div>
     <div id="propsBody"><div id="propsEmpty">Nada selecionado.<br><br>Clique em um elemento, no título de um artboard, ou na lista de camadas.</div></div>
   </div>
@@ -108,6 +108,69 @@
 </div>
 
 <div id="contextMenu"></div>
+
+<div id="colorPopover" class="colorPopover">
+  <div class="cpRow">
+    <input type="color" id="cpHue" title="Cor (matiz/RGB)">
+    <input type="text" id="cpText" placeholder="rgba(0,0,0,1) ou #hex" spellcheck="false">
+  </div>
+  <div class="cpRow cpAlphaRow">
+    <label>Opacidade</label>
+    <input type="range" id="cpAlpha" min="0" max="100">
+    <span id="cpAlphaLabel">100%</span>
+  </div>
+</div>
+
+<div id="recentProjectsOverlay" class="modalOverlay">
+  <div class="modalCard" style="width:640px; max-width:92vw;">
+    <div class="modalTitle">Projetos recentes</div>
+    <div class="modalMsg">Miniatura de referência de cada projeto — clique pra escolher o arquivo <code>.json</code> dele no disco (o navegador não guarda o caminho por segurança).</div>
+    <div id="recentProjectsGrid" class="recentGrid"></div>
+    <div class="modalActions">
+      <button id="recentProjectsClose">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div id="cssEditorModal" class="modal-backdrop" style="display:none;">
+  <div class="css-modal-content">
+    <div class="css-modal-header">
+      <h2>Editor de CSS Estruturado &amp; Biblioteca</h2>
+      <button class="css-modal-close" id="btnCloseCssEditor" title="Fechar">✕</button>
+    </div>
+    <div class="css-modal-tabs">
+      <button class="css-tab active" id="tabBtnClasses">Biblioteca de Classes</button>
+      <button class="css-tab" id="tabBtnVariables">Variáveis Globais (:root)</button>
+    </div>
+    <div class="css-modal-body">
+      <!-- Tab 1: Classes & Rules -->
+      <div id="cssTabClasses" class="css-tab-pane active">
+        <div class="css-pane-left">
+          <div class="css-search-box">
+            <input type="text" id="cssClassSearchInput" placeholder="Buscar classe...">
+            <button id="btnNewCssClass" class="miniBtn primary">+ Nova classe</button>
+          </div>
+          <div id="cssClassList" class="css-class-list">
+            <!-- Dynamic class list -->
+          </div>
+        </div>
+        <div class="css-pane-right" id="cssClassFormContainer">
+          <div class="css-empty-state">Selecione ou crie uma classe na lista ao lado para editar suas propriedades.</div>
+        </div>
+      </div>
+      <!-- Tab 2: Global Variables -->
+      <div id="cssTabVariables" class="css-tab-pane">
+        <div class="css-var-toolbar">
+          <button id="btnNewCssVar" class="miniBtn primary">+ Nova variável CSS</button>
+          <span class="css-var-hint">Variáveis globais reutilizáveis declaradas no <code>:root</code> do artboard ativo.</span>
+        </div>
+        <div id="cssVarList" class="css-var-list">
+          <!-- Dynamic variables list -->
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 </body>
