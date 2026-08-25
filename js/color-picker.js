@@ -72,6 +72,8 @@ const CP_SWATCHES = [
 ];
 function closeColorPopover(){
   document.getElementById('colorPopover').classList.remove('open');
+  if(cpLastPicked) pushRecentColor(cpLastPicked);
+  cpLastPicked = null;
   colorPopoverOnChange = null;
   stopColorPicking();
 }
@@ -261,20 +263,47 @@ function renderColorPopover(fireChange){
   const rgba = partsToRgba(p);
   document.getElementById('cpPreview').style.setProperty('--cp-preview', rgba);
   document.getElementById('cpText').value = p.a >= 1 ? hexFromRgbParts(p) : rgba;
-  if(fireChange && colorPopoverOnChange) colorPopoverOnChange(rgba);
+  if(fireChange && colorPopoverOnChange){
+    cpLastPicked = rgba;
+    colorPopoverOnChange(rgba);
+  }
 }
+// the swatch row shows the colors the user actually picked lately
+// (localStorage), then fills the rest of the row from the base palette —
+// so the palette becomes "yours" the more you use it.
+function getRecentColors(){
+  try { return JSON.parse(localStorage.getItem('ae_recent_colors') || '[]'); } catch(e){ return []; }
+}
+function pushRecentColor(c){
+  if(!c || c === 'transparent') return;
+  const list = getRecentColors().filter(function(x){ return x !== c; });
+  list.unshift(c);
+  localStorage.setItem('ae_recent_colors', JSON.stringify(list.slice(0, 16)));
+}
+function renderCpSwatches(container){
+  const recents = getRecentColors();
+  const all = recents.concat(CP_SWATCHES.filter(function(c){ return recents.indexOf(c) === -1; })).slice(0, 16);
+  container.innerHTML = all.map(function(c){
+    const bg = c === 'transparent' ? 'linear-gradient(45deg, transparent 45%, #f55 45%, #f55 55%, transparent 55%)' : c;
+    return '<button type="button" class="cpSwatch" data-color="' + c + '" style="background:' + bg + '"></button>';
+  }).join('');
+}
+// last value actually applied — pushed to recents only when the popover
+// closes, so dragging around the picker doesn't flood the list
+let cpLastPicked = null;
+
 function openColorPopover(swatchBtn, currentColor, onChange){
   const pop = document.getElementById('colorPopover');
   const parts = parseColorParts(currentColor);
   const hsv = rgbToHsv(parts.r, parts.g, parts.b);
   cpHSV = { h: hsv.h, s: hsv.s, v: hsv.v, a: parts.a };
+  cpLastPicked = null;
   renderColorPopover(false);
-  if(!document.getElementById('cpSwatches').childElementCount){
-    document.getElementById('cpSwatches').innerHTML = CP_SWATCHES.map(function(c){
-      const bg = c === 'transparent' ? 'linear-gradient(45deg, transparent 45%, #f55 45%, #f55 55%, transparent 55%)' : c;
-      return '<button type="button" class="cpSwatch" data-color="' + c + '" style="background:' + bg + '"></button>';
-    }).join('');
-    document.getElementById('cpSwatches').addEventListener('click', function(e){
+  const cpSwatchesEl = document.getElementById('cpSwatches');
+  renderCpSwatches(cpSwatchesEl);
+  if(!cpSwatchesEl.dataset.bound){
+    cpSwatchesEl.dataset.bound = '1';
+    cpSwatchesEl.addEventListener('click', function(e){
       const btn = e.target.closest('.cpSwatch');
       if(!btn) return;
       const parts2 = parseColorParts(btn.dataset.color);

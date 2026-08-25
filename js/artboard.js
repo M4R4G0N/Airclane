@@ -296,6 +296,25 @@ function applyZoom(){
   document.getElementById('zoomLabel').textContent = Math.round(state.zoom * 100) + '%';
 }
 
+// fits every artboard into the visible canvas area and centers them —
+// the fastest way back to "where is everything?" after roaming the canvas.
+function zoomToFit(){
+  const wrap = document.getElementById('canvasWrap');
+  if(!wrap || !artboards.length) return;
+  let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+  artboards.forEach(function(a){
+    minX = Math.min(minX, a.x); minY = Math.min(minY, a.y);
+    maxX = Math.max(maxX, a.x + a.w); maxY = Math.max(maxY, a.y + a.h);
+  });
+  const pad = 80;
+  const bw = maxX - minX + pad * 2, bh = maxY - minY + pad * 2;
+  state.zoom = Math.max(0.1, Math.min(1.5, Math.min(wrap.clientWidth / bw, wrap.clientHeight / bh)));
+  applyZoom();
+  wrap.scrollLeft = ((minX + maxX) / 2) * state.zoom - wrap.clientWidth / 2;
+  wrap.scrollTop = ((minY + maxY) / 2) * state.zoom - wrap.clientHeight / 2;
+  renderOverlay();
+}
+
 function deleteArtboard(ab){
   if(artboards.length <= 1) { showAlert('Precisa ter ao menos um artboard.'); return; }
   ab.dom.wrap.remove();

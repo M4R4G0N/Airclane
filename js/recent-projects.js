@@ -148,6 +148,6 @@ function onCanvasWheel(e){
 }
 document.getElementById('zoomIn').addEventListener('click', function(){ zoomBy(0.1); });
 document.getElementById('zoomOut').addEventListener('click', function(){ zoomBy(-0.1); });
-document.getElementById('zoomReset').addEventListener('click', function(){ state.zoom = 1; applyZoom(); renderOverlay(); });
+document.getElementById('zoomReset').addEventListener('click', function(){ zoomToFit(); });
 canvasWrap.addEventListener('wheel', onCanvasWheel, { passive: false });
 

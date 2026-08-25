@@ -57,6 +57,16 @@ function handleGlobalKeydown(e, activeDoc){
     }
   }
   else if(e.ctrlKey && e.key.toLowerCase() === 's'){ e.preventDefault(); document.getElementById('btnSave').click(); }
+  else if(e.ctrlKey && e.key === '1'){ e.preventDefault(); zoomToFit(); }
+  else if(e.ctrlKey && e.key === '0'){ e.preventDefault(); state.zoom = 1; applyZoom(); renderOverlay(); }
+  else if(e.key === 'F2' && state.selected && !state.artboardMode){
+    // rename the selected element's layer inline, same as double-clicking
+    // its name in the layers tree
+    e.preventDefault();
+    const row = Array.from(document.querySelectorAll('.layerRow')).find(function(r){ return r._el === state.selected; });
+    const tagEl = row && row.querySelector('.tag');
+    if(tagEl) renameLayer(state.selected, tagEl);
+  }
   else if(e.key === 'Delete' || e.key === 'Backspace'){ if(state.selected || state.artboardMode){ e.preventDefault(); deleteSelected(); } }
   else if(e.key === 'Escape'){
     if(state.stylePainter.active) setStylePainterActive(false);

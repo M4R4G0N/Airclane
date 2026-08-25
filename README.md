@@ -230,7 +230,7 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 **Lote 3 · Fundo com gradiente (Fill estilo Figma)**
 - [x] Preenchimento com Sólido / Gradiente linear / Gradiente radial — editor com barra de pré-visualização, ângulo (linear) e paradas de cor com posição % e remoção; gera `linear-gradient()` / `radial-gradient()` de verdade no CSS (exporta e re-importa sozinho, sem metadado extra)
 - [x] Trocar de tipo preserva as cores (sólido herda a primeira cor do gradiente; linear↔radial mantém as paradas)
-- [ ] Substituir a paleta atual de "cores mais usadas" por **cores recentes** de verdade
+- [x] ~~Substituir a paleta atual de "cores mais usadas"~~ → feito nos Extras: **cores recentes** de verdade (localStorage)
 
 **Lote 4 · Páginas ↔ Camadas (estilo Figma)**
 - [x] Painel lateral com abas no topo: **Páginas** (lista artboards com dimensões: trocar com clique, criar, renomear com duplo clique, duplicar ⧉ e excluir × no hover) e **Camadas** (árvore atual do artboard ativo)
@@ -246,6 +246,7 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 - [ ] Barra de fórmulas — repensar UX (adiado por decisão)
 
 **Extras**
-- [ ] Zoom pra caber tudo (`Ctrl+1` / botão)
-- [ ] `F2` pra renomear o nome da camada quando o campo dela está focado
-- [ ] Guias de alinhamento (snap) — já existem, melhorar precisão/visual
+- [x] Zoom pra caber tudo — botão "Ajustar" agora enquadra e centraliza todos os artboards de verdade (antes só voltava pra 100%), + atalhos `Ctrl+1` (ajustar) e `Ctrl+0` (100%)
+- [x] `F2` com elemento selecionado abre a renomeação inline na camada (igual duplo clique no nome)
+- [x] **Cores recentes** no seletor de cor: as últimas 16 cores escolhidas aparecem primeiro na paleta (localStorage), substituindo a lista fixa como protagonista
+- [x] Paleta fixa antiga virou complemento — preenche o restante da fileira depois das recentes
