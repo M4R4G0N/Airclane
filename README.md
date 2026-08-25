@@ -228,7 +228,7 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 - [x] Visões refinadas: "Exibir" = só o mais usado (posição, tamanho, texto, cor, fundo); "Avançado" = tudo (inclui Ação, CSS livre, atributos)
 
 **Lote 3 · Fundo com gradiente (Fill estilo Figma)**
-- [x] Preenchimento com Sólido / Gradiente linear / Gradiente radial — editor com barra de pré-visualização, ângulo (linear) e paradas de cor com posição % e remoção; gera `linear-gradient()` / `radial-gradient()` de verdade no CSS (exporta e re-importa sozinho, sem metadado extra)
+- [x] Preenchimento com Sólido / Gradiente linear / Gradiente radial — editor interativo estilo Figma: barra de gradiente com alças arrastáveis (clique na barra adiciona uma parada com a cor interpolada do ponto), botões de girar 90° e inverter, ângulo (linear), e lista de paradas com posição %, cor em hex editável, opacidade % e remoção; gera `linear-gradient()` / `radial-gradient()` de verdade no CSS (exporta e re-importa sozinho, sem metadado extra)
 - [x] Trocar de tipo preserva as cores (sólido herda a primeira cor do gradiente; linear↔radial mantém as paradas)
 - [x] ~~Substituir a paleta atual de "cores mais usadas"~~ → feito nos Extras: **cores recentes** de verdade (localStorage)
 

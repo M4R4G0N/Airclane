@@ -91,3 +91,8 @@
 
 /* checkbox rows already lay out horizontally — just stop them stretching */
 #propsPanel .checkField{margin-bottom:5px;}
+
+/* .is-hidden from base.css loses the specificity war against
+   #propsPanel .field{display:flex} — restate it scoped so hidden fields
+   (e.g. the solid-fill row while a gradient is active) actually hide */
+#propsPanel .field.is-hidden{display:none;}
