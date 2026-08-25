@@ -692,3 +692,13 @@
     position:absolute; right:14px; bottom:14px; z-index:14;
     width:34px; height:34px; padding:0; border-radius:9px; font-size:15px;
   }
+
+  /* toolbar icons + responsive labels (Fase 15 · Lote 6) */
+  #toolbar button{display:inline-flex; align-items:center; gap:5px;}
+  #toolbar button svg{width:14px; height:14px; flex:none;}
+  /* narrow windows: icon-only buttons (tooltips still carry the meaning),
+     so the whole bar stays on one line instead of wrapping into a wall */
+  @media (max-width: 1240px){
+    #toolbar .btnLabel{display:none;}
+    #toolbar button{padding:5px 8px;}
+  }

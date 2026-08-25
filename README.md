@@ -239,8 +239,8 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 - [x] Mini-mapa no canto inferior direito do canvas: todos os artboards em miniatura (o ativo destacado), retângulo da região visível, clique/arrastar pra navegar, botão − pra recolher num chip 🗺
 
 **Lote 6 · Ícones e toolbar**
-- [ ] Trocar ícones por conjunto SVG consistente (traço fino, estilo Lucide/Feather)
-- [ ] Toolbar responsiva: em telas pequenas, itens menos usados caem num menu "⋯"
+- [x] Ícones SVG consistentes (traço fino, `currentColor`, estilo Feather/Lucide) em todos os botões da toolbar — fim dos glifos unicode misturados (↶ ◇ ◐ ☰ ▤)
+- [x] Toolbar responsiva: abaixo de 1240px os rótulos de texto somem e ficam só os ícones (tooltip continua), a barra não vira uma parede de botões
 
 **Lote 7 · Depois**
 - [ ] Barra de fórmulas — repensar UX (adiado por decisão)
