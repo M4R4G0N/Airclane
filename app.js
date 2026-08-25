@@ -5324,51 +5324,67 @@ function getFormulaNames(){
   return names;
 }
 
+// The proxy is the sugar: it intercepts property access so .hide(),
+// .show(), .toggle() etc. work as methods, while everything else falls
+// through to the real DOM element. Shared by the editor runtime and the
+// runtime inlined into exported HTML (which looks elements up by the
+// throwaway data-ae-eid instead of data-ae-name).
+const AE_FORMULA_PROXY_SRC =
+  'function _aeProxy(el){' +
+    'if(!el)return{};' +
+    'return new Proxy(el,{' +
+      'get:function(t,k){' +
+        'if(k==="hide")return function(){t.style.display="none";};' +
+        'if(k==="show")return function(){t.style.display="";};' +
+        'if(k==="toggle")return function(){t.style.display=t.style.display==="none"?"":"none";};' +
+        'if(k==="text")return t.textContent;' +
+        'if(k==="html")return t.innerHTML;' +
+        'if(k==="value")return t.value;' +
+        'var v=t[k];' +
+        'return typeof v==="function"?v.bind(t):v;' +
+      '},' +
+      'set:function(t,k,v){' +
+        'if(k==="text"){t.textContent=v;return true;}' +
+        'if(k==="html"){t.innerHTML=v;return true;}' +
+        'if(k==="value"){t.value=v;return true;}' +
+        't[k]=v;return true;' +
+      '}' +
+    '});' +
+  '}';
+
+// One "var name=_aeProxy(document.querySelector(...))" per pair
+// ({ safe, selector }).
+function buildFormulaDecls(pairs){
+  return pairs.map(function(p){
+    return 'var ' + p.safe + '=_aeProxy(document.querySelector(\'' + p.selector.replace(/'/g, "\\'") + '\'));';
+  }).join('');
+}
+
 // Build a small runtime script that declares each named element as a
-// variable pointing to a proxy — the proxy intercepts property access
-// so .hide(), .show(), .toggle() etc. work as sugar, while everything
-// else falls through to the real DOM element.
-function buildFormulaRuntime(doc){
-  const names = [];
+// variable pointing to a proxy. The optional body (the user's formula)
+// is wrapped INSIDE the same IIFE as the declarations — running it after
+// the closure would leave every name out of scope ("x is not defined").
+function buildFormulaRuntime(doc, body){
+  const pairs = [];
   function walk(el){
     if(!isEditableEl(el, doc)) return;
-    if(el.dataset.aeName) names.push(el.dataset.aeName);
+    if(el.dataset.aeName){
+      pairs.push({
+        safe: el.dataset.aeName.replace(/[^a-zA-Z0-9_$]/g, '_'),
+        selector: '[data-ae-name="' + el.dataset.aeName.replace(/"/g, '\\"') + '"]'
+      });
+    }
     Array.from(el.children).forEach(walk);
   }
   if(doc && doc.body) Array.from(doc.body.children).forEach(walk);
-  if(!names.length) return '';
+  if(!pairs.length && !body) return '';
 
   // One runtime per artboard — idempotent if re-run (overwrites vars).
-  const runtime =
-    '(function(){' +
-      'var _aeMap={};' +
-      'function _aeProxy(el){' +
-        'if(!el)return{};' +
-        'return new Proxy(el,{' +
-          'get:function(t,k){' +
-            'if(k==="hide")return function(){t.style.display="none";};' +
-            'if(k==="show")return function(){t.style.display="";};' +
-            'if(k==="toggle")return function(){t.style.display=t.style.display==="none"?"":"none";};' +
-            'if(k==="text")return t.textContent;' +
-            'if(k==="html")return t.innerHTML;' +
-            'if(k==="value")return t.value;' +
-            'var v=t[k];' +
-            'return typeof v==="function"?v.bind(t):v;' +
-          '},' +
-          'set:function(t,k,v){' +
-            'if(k==="text"){t.textContent=v;return true;}' +
-            'if(k==="html"){t.innerHTML=v;return true;}' +
-            'if(k==="value"){t.value=v;return true;}' +
-            't[k]=v;return true;' +
-          '}' +
-        '});' +
-      '}' +
-      names.map(function(n){
-        return '_aeMap["' + n.replace(/"/g, '\\"') + '"]=document.querySelector(\'[data-ae-name="' + n.replace(/"/g, '\\"') + '"]\');' +
-          'var ' + n.replace(/[^a-zA-Z0-9_$]/g, '_') + '=_aeProxy(_aeMap["' + n.replace(/"/g, '\\"') + '"]);';
-      }).join('') +
+  return '(function(){' +
+      AE_FORMULA_PROXY_SRC +
+      buildFormulaDecls(pairs) +
+      (body ? '\n' + body + '\n' : '') +
     '})();';
-  return runtime;
 }
 
 // Compile a user-written formula into executable JS by prefixing the
@@ -5376,7 +5392,6 @@ function buildFormulaRuntime(doc){
 function compileFormula(formula){
   const doc = getDoc();
   if(!doc || !doc.body) return null;
-  const runtime = buildFormulaRuntime(doc);
   const safeNames = getFormulaNames().map(function(n){ return n.replace(/[^a-zA-Z0-9_$]/g, '_'); });
   // basic sanity: reject assignment to unknown identifiers (typos)
   const unknownIdRe = /\b([a-zA-Z_$][\w$]*)\b/g;
@@ -5395,7 +5410,7 @@ function compileFormula(formula){
       }
     }
   }
-  const wrapped = runtime + '\ntry{\n  ' + formula + ';\n}catch(e){\n  console.error("[Fórmula]", e.message);\n}';
+  const wrapped = buildFormulaRuntime(doc, 'try{\n  ' + formula + ';\n}catch(e){\n  console.error("[Fórmula]", e.message);\n}');
   return { code: wrapped };
 }
 
@@ -5561,6 +5576,7 @@ function closeFormulaAc(){
     if(!result.ok){
       showAlert(result.error || 'Erro na fórmula.', 'Fórmula');
     } else {
+      if(formulaNeedsPersistence(formula)) storeFormulaInDoc(getDoc(), formula);
       pushHistory(); syncCodeFromCanvas();
       // flash success
       input.style.borderColor = 'var(--accent)';
@@ -5573,27 +5589,59 @@ function closeFormulaAc(){
 // stored formulas into the exported HTML so they work standalone.
 // Formulas are stored as data-ae-formula on a small script tag in the
 // artboard's body (invisible, no side effects until the runtime runs).
+//
+// Only BEHAVIORAL formulas are stored. A formula that mutates the DOM
+// (div_1.hide(), card.text = "x") already persists by itself — the change
+// is serialized into the exported HTML — so storing it would re-apply a
+// state the user may have changed afterwards. Event bindings
+// (btn.onclick = ..., addEventListener) leave no trace in serialized HTML,
+// so they're the ones that need to be re-run when the file opens.
+function formulaNeedsPersistence(formula){
+  return /(\.on[a-z]+\s*=|addEventListener\s*\()/.test(formula);
+}
+
 function storeFormulaInDoc(doc, formula){
   if(!doc || !doc.body) return;
   let tag = doc.querySelector('script[data-ae-formula]');
   if(!tag){
     tag = doc.createElement('script');
+    // a non-JS type keeps the tag INERT — without it the raw formula
+    // (which expects the proxy runtime's variables in scope) would
+    // execute bare every time the artboard's HTML is re-parsed
+    tag.type = 'text/x-ae-formula';
     tag.setAttribute('data-ae-formula', '1');
     doc.body.appendChild(tag);
   }
   const existing = (tag.textContent || '').trim();
+  const lines = existing ? existing.split('\n') : [];
+  if(lines.indexOf(formula) !== -1) return; // already stored, don't duplicate
   tag.textContent = existing ? existing + '\n' + formula : formula;
 }
 
 function wireExportFormulas(doc, clone){
   const formulaTag = clone.querySelector('script[data-ae-formula]');
   if(!formulaTag) return;
-  const formulas = formulaTag.textContent;
+  const formulas = (formulaTag.textContent || '').trim();
   formulaTag.remove();
-  const runtime = buildFormulaRuntime(doc);
-  if(!runtime && !formulas) return;
+  if(!formulas) return;
+  // Formulas reference elements by layer name (data-ae-name), which
+  // cleanExportHTML strips right after this runs — so every named element a
+  // formula actually mentions gets a throwaway eid, and the exported runtime
+  // looks elements up by that instead (same trick as toggle/settext actions).
+  let counter = 0;
+  const pairs = [];
+  clone.querySelectorAll('[data-ae-name]').forEach(function(el){
+    const name = el.getAttribute('data-ae-name');
+    const safe = name.replace(/[^a-zA-Z0-9_$]/g, '_');
+    const re = new RegExp('\\b' + safe.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+    if(!re.test(formulas)) return;
+    let eid = el.getAttribute('data-ae-eid');
+    if(!eid){ eid = 'ae-el-f' + (++counter); el.setAttribute('data-ae-eid', eid); }
+    pairs.push({ safe: safe, selector: '[data-ae-eid="' + eid + '"]' });
+  });
+  const body = 'try{\n' + formulas + '\n}catch(e){\n  console.error("[Fórmula]", e.message);\n}';
   const script = doc.createElement('script');
-  script.textContent = (runtime || '') + '\n' + (formulas || '');
+  script.textContent = '(function(){' + AE_FORMULA_PROXY_SRC + buildFormulaDecls(pairs) + '\n' + body + '\n})();';
   clone.querySelector('body').appendChild(script);
 }
 

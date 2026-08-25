@@ -4,7 +4,7 @@ Leitor e editor de artifacts, offline. App HTML, sem servidor e sem dependência
 
 - **Local:** `ArtifactEditor/` (`index.html` + `style.css` + `app.js`)
 - **Stack:** HTML + CSS + JS puro, sem build
-- **Fase atual:** 1–9 e 11–13 concluídas · 14 em andamento (redesign do painel de Propriedades) · planejando 10
+- **Fase atual:** 1–14 concluídas 🎉
 
 ---
 
@@ -20,13 +20,14 @@ Leitor e editor de artifacts, offline. App HTML, sem servidor e sem dependência
 - [x] **07. Atributos, classes e menus**
 - [x] **08. Editor de CSS estruturado**
 - [x] **09. JS e ações do artboard**
+- [x] **10. Barra de fórmulas (estilo Power Apps)**
 - [x] **11. Gráficos (canvas)**
 - [x] **12. Tabelas — melhorias**
 - [x] **13. Redesenho da interface**
-- [~] **14. Ajustes finos do editor** — em andamento (redesign do painel de Propriedades)
+- [x] **14. Ajustes finos do editor**
 
 ### — Planejado —
-- [ ] **10. Barra de fórmulas (estilo Power Apps)**
+_(nada por aqui — todas as fases concluídas)_
 
 ---
 
@@ -191,14 +192,17 @@ Uma lista de coisas menores, a maioria do tipo "isso aqui devia dar pra ajustar 
 
 ---
 
-## — Planejado —
-
-### FASE 10 · Barra de fórmulas (estilo Power Apps) `planejado`
+### FASE 10 · Barra de fórmulas (estilo Power Apps) `concluído`
 Um jeito de "programar" o artifact parecido com Power Apps, mas em JS de verdade por trás — chamar qualquer elemento pelo nome e ver o que dá pra fazer com ele.
-- Cada elemento tem um nome chamável (o mesmo nome que aparece na camada)
-- Uma barra/campo de fórmula onde digitar o nome do elemento sugere (autocomplete) as ações e propriedades disponíveis dele
-- Isso vira JS de verdade por baixo — não é uma linguagem própria, é açúcar sintático pra não escrever `document.querySelector` toda hora
-- Integra com o sistema de ações da Fase 9 (as ações viram os "verbos" que aparecem sugeridos)
-- *Exemplo:* elemento renomeado pra `div_1` na camada. Na barra de fórmula, digitar `div_1.` sugere as ações e propriedades daquele elemento específico — parecido com `Button1.OnSelect` no Power Apps, só que virando JS puro.
-- **Decisão tomada na Fase 9:** o "nome chamável" fica como metadado interno (`data-ae-name`), nunca aparece no HTML exportado. Na exportação, só os elementos que uma ação/fórmula realmente referencia ganham um identificador descartável e opaco (`data-ae-eid`) gerado na hora — o resto do documento fica limpo.
-- **Por que ainda não foi construída:** é a peça mais arriscada de fazer sem testar ao vivo — precisa de um mini-editor com autocomplete de verdade (sugestão aparecendo enquanto digita, navegação por teclado, inserir o trecho de JS na posição certa do cursor), bem diferente dos campos de formulário simples usados no resto do app. Prefiro construir isso numa sessão em que dá pra testar cada passo no navegador, pra não entregar um autocomplete quebrado.
+- [x] Cada elemento tem um nome chamável (o mesmo nome que aparece na camada, guardado como `data-ae-name`)
+- [x] Barra de fórmula (botão **ƒx Fórmulas** na toolbar): digitar o nome do elemento sugere os nomes das camadas; digitar `nome.` sugere as ações e propriedades daquele elemento — com navegação por teclado (setas, Tab/Enter pra aceitar, Esc pra fechar) e inserção na posição do cursor
+- [x] Vira JS de verdade por baixo — um runtime minúsculo declara cada elemento nomeado como variável apontando pra um `Proxy`, que intercepta `hide()`, `show()`, `toggle()`, `text`, `html`, `value` e deixa todo o resto cair no elemento DOM real (`div_1.style.color = 'red'` funciona direto)
+- [x] Integra com o sistema de ações da Fase 9 — `hide`/`show`/`toggle` são os mesmos "verbos" das ações prontas
+- [x] Validação de nomes: digitar `nome_errado.algo` mostra erro amigável em vez de falhar em silêncio
+- [x] Persistência inteligente: fórmulas **comportamentais** (`btn.onclick = ...`, `addEventListener`) são guardadas no documento (numa tag `<script type="text/x-ae-formula">` inerte) e re-executadas no HTML exportado; fórmulas de mutação (`div_1.hide()`, `.text = ...`) não precisam — a mudança já vai serializada no próprio HTML
+- [x] Exportação limpa: `data-ae-name` nunca aparece no HTML final; só os elementos que uma fórmula realmente referencia ganham um `data-ae-eid` descartável gerado na hora, e o runtime exportado resolve por ele
+- **Bugs encontrados e corrigidos na sessão de testes ao vivo (headless Chromium):**
+  1. **Escopo do runtime** — as variáveis eram declaradas dentro de uma IIFE e a fórmula rodava *fora* dela → toda fórmula falhava com `x is not defined`. Agora a fórmula é injetada dentro da mesma closure das declarações.
+  2. **Exportação quebrada** — o runtime exportado buscava elementos por `[data-ae-name]`, mas o `cleanExportHTML` remove esse atributo logo em seguida. Agora a exportação atribui `data-ae-eid` aos elementos referenciados e o runtime exportado resolve por eid (mesmo truque das ações toggle/settext).
+  3. **Fórmula guardada executando crua** — a tag que guarda fórmulas no documento era um `<script>` comum e executava sem o runtime ao re-parsear o HTML. Agora usa `type="text/x-ae-formula"` (inerte pro navegador, lida só na exportação).
+  4. **Persistência nunca era acionada** — `storeFormulaInDoc` existia mas nada chamava; agora o botão de rodar guarda fórmulas comportamentais (com dedupe) antes do `pushHistory`.
