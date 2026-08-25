@@ -127,62 +127,119 @@ function gradientStopAt(g, pos){
   return at(stops[0]);
 }
 
-// ---------- UI ----------
+// ---------- fill popover (gradient editor lives inside the color popover) ----------
 
-function gradientStopRowHTML(stop, i){
-  return '<div class="gradientStop" data-i="' + i + '">' +
-    '<input type="number" class="gradientPosInput" min="0" max="100" value="' + stop.pos + '" title="Posição da cor no gradiente (%)">' +
-    colorSwatchHTML('pGStop' + i, stop.color) +
-    '<input type="text" class="gradientHexInput" value="' + stop.color.replace(/"/g, '&quot;') + '" spellcheck="false" title="Cor em hexadecimal">' +
-    '<input type="number" class="gradientOpacityInput" min="0" max="100" value="' + stop.opacity + '" title="Opacidade (%)">' +
-    '<button type="button" class="miniBtn gradientStopRemove" title="Remover esta cor">×</button>' +
-  '</div>';
+// state of the popover while it's acting as a fill editor: the gradient
+// draft being edited and which stop the color picker is bound to. Survives
+// tab switches (solid → linear → radial) so toggling back restores stops.
+let fillPopoverState = null;
+
+function openFillPopover(swatchBtn){
+  const sel = effectiveSelection();
+  if(!sel.length) return;
+  const existing = parseGradientCss(sel[0].style.backgroundImage);
+  fillPopoverState = {
+    swatch: swatchBtn,
+    grad: existing || defaultGradient('linear', sel[0]),
+    sel: 0
+  };
+  cpFillTabHandler = switchFillMode;
+  openFillForMode(existing ? existing.type : 'solid');
 }
 
-function gradientFillHTML(el){
-  const g = parseGradientCss(el.style.backgroundImage);
-  const type = g ? g.type : 'solid';
-  const draft = g || defaultGradient('linear', el);
-  // rotate only makes sense for linear; flip (mirror stops) works for both
-  const shapeBtns = type === 'solid' ? '' :
-    (type === 'linear' ? '<button type="button" id="pGradientRotate" class="miniBtn" title="Girar 90°"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.5 15a9 9 0 1 1-1.2-7.4L23 10"/></svg></button>' : '') +
-    '<button type="button" id="pGradientFlip" class="miniBtn" title="Inverter direção"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>';
-  let html = '<div class="field"><label>Tipo de fundo</label><select id="pFillType">' +
-    '<option value="solid"' + (type === 'solid' ? ' selected' : '') + '>Sólido</option>' +
-    '<option value="linear"' + (type === 'linear' ? ' selected' : '') + '>Linear</option>' +
-    '<option value="radial"' + (type === 'radial' ? ' selected' : '') + '>Radial</option>' +
-    '</select>' + shapeBtns + '</div>';
-  if(type === 'solid') return html;
-  html += '<div id="pGradientEditor">' +
-    '<div id="pGradientBar" class="gradientBar" title="Arraste as cores ou clique para adicionar"><div class="gradientBarFill"></div>' +
-      draft.stops.map(function(s, i){ return '<div class="gradientHandle" data-i="' + i + '"></div>'; }).join('') +
-    '</div>' +
-    (type === 'linear' ? '<div class="field">' + iconFieldHTML('∠', 'pGradientAngle', draft.angle, 'Ângulo do gradiente (graus)') + '</div>' : '') +
-    '<div class="gradientStopsHead"><span>Stops</span><button type="button" id="pGradientAddStop" class="miniBtn" title="Adicionar cor">+</button></div>' +
-    '<div id="pGradientStops">' + draft.stops.map(gradientStopRowHTML).join('') + '</div>' +
-  '</div>';
-  return html;
-}
-
-function readGradientDraft(){
-  const typeSel = document.getElementById('pFillType');
-  const angleEl = document.getElementById('pGradientAngle');
-  const stops = [];
-  document.querySelectorAll('#pGradientStops .gradientStop').forEach(function(row){
-    stops.push({
-      color: row.querySelector('.colorSwatchBtn').dataset.color,
-      opacity: Math.max(0, Math.min(100, parseFloat(row.querySelector('.gradientOpacityInput').value) || 0)),
-      pos: Math.max(0, Math.min(100, parseFloat(row.querySelector('.gradientPosInput').value) || 0))
+function switchFillMode(mode){
+  const sel = effectiveSelection();
+  if(!sel.length || !fillPopoverState) return;
+  const el = sel[0];
+  if(mode === 'solid'){
+    // keep the gradient's first color as the new solid fill instead of
+    // dropping the user onto a transparent background
+    const existing = parseGradientCss(el.style.backgroundImage);
+    const c = existing ? existing.stops[0].color : (el.style.backgroundColor || '');
+    sel.forEach(function(t){
+      t.style.backgroundImage = '';
+      if(c) t.style.backgroundColor = c;
     });
+    fillPopoverState.swatch.dataset.color = c;
+    fillPopoverState.swatch.querySelector('span').style.background = c || 'transparent';
+  } else {
+    // keep the user's stops across linear↔radial, just change the shape
+    const existing = parseGradientCss(el.style.backgroundImage);
+    if(existing) fillPopoverState.grad = existing;
+    fillPopoverState.grad.type = mode;
+    applyFillGradient();
+  }
+  pushHistory(); syncCodeFromCanvas();
+  openFillForMode(mode);
+}
+
+function openFillForMode(mode){
+  const sel = effectiveSelection();
+  if(!sel.length || !fillPopoverState) return;
+  if(mode === 'solid'){
+    const current = getComputedStyle(sel[0]).backgroundColor;
+    openColorPopover(fillPopoverState.swatch, current, function(rgba){
+      effectiveSelection().forEach(function(t){
+        t.style.backgroundImage = '';
+        t.style.backgroundColor = rgba;
+      });
+      fillPopoverState.swatch.dataset.color = rgba;
+      fillPopoverState.swatch.querySelector('span').style.background = rgba;
+      updateOverlayLive();
+      clearTimeout(codeDebounce);
+      codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+    }, 'solid');
+  } else {
+    fillPopoverState.grad.type = mode;
+    applyFillGradient();
+    bindPickerToStop(mode);
+    renderCpGradientArea();
+  }
+}
+
+// point the popover's color picker at the currently selected stop: every
+// picker change (SV area, hue, alpha, hex, swatches, eyedropper) rewrites
+// that stop and reapplies the whole gradient.
+function bindPickerToStop(mode){
+  const g = fillPopoverState.grad;
+  const i = fillPopoverState.sel;
+  openColorPopover(fillPopoverState.swatch, stopCssColor(g.stops[i]), function(rgba){
+    const ns = cssColorToStop(rgba, 0);
+    g.stops[i].color = ns.color;
+    g.stops[i].opacity = ns.opacity;
+    applyFillGradient();
+    renderCpGradientArea();
+  }, mode);
+}
+
+function applyFillGradient(){
+  const g = fillPopoverState.grad;
+  if(g.stops.length < 2) return;
+  const css = buildGradientCss(g);
+  effectiveSelection().forEach(function(t){
+    t.style.backgroundColor = '';
+    t.style.backgroundImage = css;
   });
-  return { type: typeSel.value, angle: angleEl ? (parseFloat(angleEl.value) || 90) : 90, stops: stops };
+  fillPopoverState.swatch.querySelector('span').style.background = css;
+  updateOverlayLive();
+  clearTimeout(codeDebounce);
+  codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+}
+
+function selectCpStop(i){
+  fillPopoverState.sel = i;
+  document.querySelectorAll('#cpGradientArea .gradientHandle, #cpGradientArea .cpGStop').forEach(function(n){
+    n.classList.toggle('active', +n.dataset.i === i);
+  });
+  bindPickerToStop(fillPopoverState.grad.type);
 }
 
 // the bar always renders stops as a horizontal strip (even for radial) —
 // it represents the color ramp, not the gradient's shape on the element.
-function syncGradientBar(g){
-  const bar = document.getElementById('pGradientBar');
-  if(!bar) return;
+function syncCpGradientBar(){
+  const bar = document.getElementById('cpGradientBar');
+  if(!bar || !fillPopoverState) return;
+  const g = fillPopoverState.grad;
   const ramp = 'linear-gradient(90deg, ' + g.stops.map(function(s){ return stopCssColor(s) + ' ' + s.pos + '%'; }).join(', ') + ')';
   bar.querySelector('.gradientBarFill').style.background = ramp;
   bar.querySelectorAll('.gradientHandle').forEach(function(h){
@@ -190,82 +247,76 @@ function syncGradientBar(g){
     if(!s) return;
     h.style.left = s.pos + '%';
     h.style.background = stopCssColor(s);
+    h.classList.toggle('active', +h.dataset.i === fillPopoverState.sel);
   });
 }
 
-function selectGradientStop(i){
-  document.querySelectorAll('#pGradientBar .gradientHandle, #pGradientStops .gradientStop').forEach(function(n){
-    n.classList.toggle('active', +n.dataset.i === i);
-  });
+function cpGStopRowHTML(stop, i){
+  return '<div class="cpGStop' + (i === fillPopoverState.sel ? ' active' : '') + '" data-i="' + i + '">' +
+    '<input type="number" class="cpGPos" min="0" max="100" value="' + stop.pos + '" title="Posição da cor no gradiente (%)">' +
+    '<span class="cpGSwatch" style="background:' + stop.color + '"></span>' +
+    '<input type="text" class="cpGHex" value="' + stop.color.replace(/"/g, '&quot;') + '" spellcheck="false" title="Cor em hexadecimal">' +
+    '<input type="number" class="cpGOpacity" min="0" max="100" value="' + stop.opacity + '" title="Opacidade (%)">' +
+    '<button type="button" class="miniBtn cpGRemove" title="Remover esta cor">×</button>' +
+  '</div>';
 }
 
-function applyGradientDraft(){
-  const g = readGradientDraft();
-  if(g.stops.length < 2) return;
-  const css = buildGradientCss(g);
-  effectiveSelection().forEach(function(t){
-    t.style.backgroundColor = '';
-    t.style.backgroundImage = css;
-  });
-  syncGradientBar(g);
-  updateOverlayLive();
-  clearTimeout(codeDebounce);
-  codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+function renderCpGradientArea(){
+  const area = document.getElementById('cpGradientArea');
+  if(!area || !fillPopoverState) return;
+  const g = fillPopoverState.grad;
+  area.innerHTML =
+    '<div id="cpGradientBar" class="gradientBar" title="Arraste as cores ou clique para adicionar"><div class="gradientBarFill"></div>' +
+      g.stops.map(function(s, i){ return '<div class="gradientHandle" data-i="' + i + '"></div>'; }).join('') +
+    '</div>' +
+    (g.type === 'linear'
+      ? '<div class="cpGShapeRow">' +
+          '<div class="iconField" title="Ângulo do gradiente (graus)"><span class="iconFieldPrefix">∠</span><input type="number" id="cpGAngle" value="' + g.angle + '"></div>' +
+          '<button type="button" id="cpGRotate" class="miniBtn" title="Girar 90°"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.5 15a9 9 0 1 1-1.2-7.4L23 10"/></svg></button>' +
+          '<button type="button" id="cpGFlip" class="miniBtn" title="Inverter direção"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>' +
+        '</div>'
+      : '<div class="cpGShapeRow"><button type="button" id="cpGFlip" class="miniBtn" title="Inverter direção"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button></div>') +
+    '<div class="cpGStops">' + g.stops.map(cpGStopRowHTML).join('') + '</div>' +
+    '<button type="button" id="cpGAddStop" class="miniBtn cpGAdd">+ Adicionar cor</button>';
+  syncCpGradientBar();
+  wireCpGradientArea();
+  clampColorPopover(); // area grew the popover — keep it on screen
 }
 
-function bindGradientFill(el){
-  const typeSel = document.getElementById('pFillType');
-  if(!typeSel) return;
+function wireCpGradientArea(){
+  const g = fillPopoverState.grad;
+  const area = document.getElementById('cpGradientArea');
+  const bar = document.getElementById('cpGradientBar');
 
-  typeSel.addEventListener('change', function(){
-    const existing = parseGradientCss(el.style.backgroundImage);
-    if(typeSel.value === 'solid'){
-      // keep the gradient's first color as the new solid fill instead of
-      // dropping the user onto a transparent background
-      const c = existing ? existing.stops[0].color : '';
-      effectiveSelection().forEach(function(t){
-        t.style.backgroundImage = '';
-        if(c) t.style.backgroundColor = c;
-      });
-    } else {
-      const g = existing || defaultGradient(typeSel.value, el);
-      g.type = typeSel.value; // keep the user's stops, just change the shape
-      const css = buildGradientCss(g);
-      effectiveSelection().forEach(function(t){
-        t.style.backgroundColor = '';
-        t.style.backgroundImage = css;
-      });
-    }
-    pushHistory(); syncCodeFromCanvas();
-    renderProps();
+  const angleEl = document.getElementById('cpGAngle');
+  if(angleEl) angleEl.addEventListener('input', function(){
+    g.angle = parseFloat(angleEl.value) || 90;
+    applyFillGradient();
   });
 
-  const bar = document.getElementById('pGradientBar');
-  if(!bar) return; // solid fill — no editor to wire
-  syncGradientBar(readGradientDraft());
-
-  const angleEl = document.getElementById('pGradientAngle');
-  if(angleEl) angleEl.addEventListener('input', applyGradientDraft);
-
-  const rotateBtn = document.getElementById('pGradientRotate');
+  const rotateBtn = document.getElementById('cpGRotate');
   if(rotateBtn) rotateBtn.addEventListener('click', function(){
-    angleEl.value = ((parseFloat(angleEl.value) || 0) + 90) % 360;
-    applyGradientDraft();
+    g.angle = ((g.angle || 0) + 90) % 360;
+    angleEl.value = g.angle;
+    applyFillGradient();
   });
 
-  const flipBtn = document.getElementById('pGradientFlip');
+  const flipBtn = document.getElementById('cpGFlip');
   if(flipBtn) flipBtn.addEventListener('click', function(){
-    document.querySelectorAll('#pGradientStops .gradientPosInput').forEach(function(inp){
-      inp.value = 100 - (parseFloat(inp.value) || 0);
-    });
-    applyGradientDraft();
+    g.stops.forEach(function(s){ s.pos = 100 - s.pos; });
+    applyFillGradient();
     pushHistory(); syncCodeFromCanvas();
-    renderProps();
+    renderCpGradientArea();
   });
 
   // gradient bar: drag a handle to move its stop, click empty bar to drop a
   // new stop right where the cursor is (with the interpolated color).
   bar.addEventListener('mousedown', function(e){
+    // stopPropagation isn't optional here: adding a stop rebuilds the bar's
+    // DOM, which detaches e.target before the event bubbles to document —
+    // the popover's outside-mousedown closer would then read it as a click
+    // outside the popover and close it mid-interaction
+    e.stopPropagation();
     const handle = e.target.closest('.gradientHandle');
     const rect = bar.getBoundingClientRect();
     const posAt = function(ev){
@@ -274,53 +325,50 @@ function bindGradientFill(el){
     if(handle){
       e.preventDefault();
       const i = +handle.dataset.i;
-      selectGradientStop(i);
-      const posInput = document.querySelectorAll('#pGradientStops .gradientStop')[i].querySelector('.gradientPosInput');
+      selectCpStop(i);
       const move = function(ev){
-        posInput.value = posAt(ev);
-        applyGradientDraft();
+        g.stops[i].pos = posAt(ev);
+        applyFillGradient();
+        syncCpGradientBar();
       };
       const up = function(){
         window.removeEventListener('mousemove', move);
         window.removeEventListener('mouseup', up);
         pushHistory(); syncCodeFromCanvas();
+        renderCpGradientArea(); // refresh the row's pos input once, at the end
       };
       window.addEventListener('mousemove', move);
       window.addEventListener('mouseup', up);
     } else {
-      const g = readGradientDraft();
       g.stops.push(gradientStopAt(g, posAt(e)));
-      const css = buildGradientCss(g);
-      effectiveSelection().forEach(function(t){
-        t.style.backgroundColor = '';
-        t.style.backgroundImage = css;
-      });
+      applyFillGradient();
       pushHistory(); syncCodeFromCanvas();
-      renderProps();
-      selectGradientStop(g.stops.length - 1);
+      fillPopoverState.sel = g.stops.length - 1;
+      bindPickerToStop(g.type);
+      renderCpGradientArea();
     }
   });
 
-  document.querySelectorAll('#pGradientStops .gradientStop').forEach(function(row){
+  area.querySelectorAll('.cpGStop').forEach(function(row){
     const i = +row.dataset.i;
-    const swatch = row.querySelector('.colorSwatchBtn');
-    const hexInput = row.querySelector('.gradientHexInput');
-    const posInput = row.querySelector('.gradientPosInput');
-    const opInput = row.querySelector('.gradientOpacityInput');
+    const posInput = row.querySelector('.cpGPos');
+    const hexInput = row.querySelector('.cpGHex');
+    const opInput = row.querySelector('.cpGOpacity');
 
-    row.addEventListener('mousedown', function(){ selectGradientStop(i); });
+    row.addEventListener('mousedown', function(){
+      if(i !== fillPopoverState.sel) selectCpStop(i);
+    });
 
-    swatch.addEventListener('click', function(e){
-      e.stopPropagation();
-      const g = readGradientDraft();
-      openColorPopover(swatch, stopCssColor(g.stops[i]), function(rgbaStr){
-        const stop = cssColorToStop(rgbaStr, 0);
-        swatch.dataset.color = stop.color;
-        swatch.querySelector('span').style.background = stop.color;
-        hexInput.value = stop.color;
-        opInput.value = stop.opacity;
-        applyGradientDraft();
-      });
+    posInput.addEventListener('input', function(){
+      g.stops[i].pos = Math.max(0, Math.min(100, parseFloat(posInput.value) || 0));
+      applyFillGradient();
+      syncCpGradientBar();
+    });
+
+    opInput.addEventListener('input', function(){
+      g.stops[i].opacity = Math.max(0, Math.min(100, parseFloat(opInput.value) || 0));
+      applyFillGradient();
+      syncCpGradientBar();
     });
 
     hexInput.addEventListener('change', function(){
@@ -328,30 +376,28 @@ function bindGradientFill(el){
       if(v && v[0] !== '#') v = '#' + v;
       const rgba = parseColorToRgba(v);
       if(rgba){
-        swatch.dataset.color = rgbaToHex(rgba);
-        swatch.querySelector('span').style.background = rgbaToHex(rgba);
-        hexInput.value = rgbaToHex(rgba);
-        opInput.value = Math.round(rgba.a * 100);
-        applyGradientDraft();
+        g.stops[i].color = rgbaToHex(rgba);
+        g.stops[i].opacity = Math.round(rgba.a * 100);
+        applyFillGradient();
+        bindPickerToStop(g.type); // picker follows the typed color
+        renderCpGradientArea();
       } else {
-        hexInput.value = swatch.dataset.color; // invalid color — revert
+        hexInput.value = g.stops[i].color; // invalid color — revert
       }
     });
 
-    posInput.addEventListener('input', applyGradientDraft);
-    opInput.addEventListener('input', applyGradientDraft);
-
-    row.querySelector('.gradientStopRemove').addEventListener('click', function(){
-      if(document.querySelectorAll('#pGradientStops .gradientStop').length <= 2) return;
-      row.remove();
-      applyGradientDraft();
+    row.querySelector('.cpGRemove').addEventListener('click', function(){
+      if(g.stops.length <= 2) return;
+      g.stops.splice(i, 1);
+      fillPopoverState.sel = Math.min(fillPopoverState.sel, g.stops.length - 1);
+      applyFillGradient();
       pushHistory(); syncCodeFromCanvas();
-      renderProps();
+      bindPickerToStop(g.type);
+      renderCpGradientArea();
     });
   });
 
-  document.getElementById('pGradientAddStop').addEventListener('click', function(){
-    const g = readGradientDraft();
+  document.getElementById('cpGAddStop').addEventListener('click', function(){
     // drop the new stop in the middle of the widest gap so it lands where
     // the ramp is least defined, not always at the end
     const sorted = g.stops.slice().sort(function(a, b){ return a.pos - b.pos; });
@@ -363,13 +409,10 @@ function bindGradientFill(el){
       }
     }
     g.stops.push(gradientStopAt(g, gapPos));
-    const css = buildGradientCss(g);
-    effectiveSelection().forEach(function(t){
-      t.style.backgroundColor = '';
-      t.style.backgroundImage = css;
-    });
+    applyFillGradient();
     pushHistory(); syncCodeFromCanvas();
-    renderProps();
-    selectGradientStop(g.stops.length - 1);
+    fillPopoverState.sel = g.stops.length - 1;
+    bindPickerToStop(g.type);
+    renderCpGradientArea();
   });
 }
