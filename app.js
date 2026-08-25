@@ -506,12 +506,13 @@ function wireExportCharts(doc, clone){
   clone.querySelector('body').appendChild(script);
 }
 
-// editor-only bookkeeping (custom layer names) stripped from the file the
-// user actually downloads, so the exported artifact stays clean HTML.
-function cleanExportHTML(ab){
+// shared by every export path: wires up actions/charts/formulas and strips
+// editor-only bookkeeping, leaving a clone that's either serialized whole
+// (cleanExportHTML) or picked apart into separate files (cleanExportSplit).
+function buildExportClone(ab){
   let doc;
   try { doc = ab.dom.frame.contentDocument; } catch(e){ doc = null; }
-  if(!doc) return DEFAULT_DOC;
+  if(!doc) return null;
   const clone = doc.documentElement.cloneNode(true);
   wireExportGotoLinks(clone);
   wireExportActions(doc, clone);
@@ -530,7 +531,50 @@ function cleanExportHTML(ab){
   // file should see in their <head>.
   const sizeMeta = clone.querySelector('meta[name="ae-artboard-size"]');
   if(sizeMeta) sizeMeta.remove();
-  return '<!doctype html>\n' + clone.outerHTML;
+  return { doc: doc, clone: clone };
+}
+
+// editor-only bookkeeping (custom layer names) stripped from the file the
+// user actually downloads, so the exported artifact stays clean HTML.
+function cleanExportHTML(ab){
+  const built = buildExportClone(ab);
+  if(!built) return DEFAULT_DOC;
+  return '<!doctype html>\n' + built.clone.outerHTML;
+}
+
+// same clean export, but with every <style> and <script> pulled out of the
+// document into their own strings — so the caller can save base.html +
+// base.css + base.js as three files next to each other, instead of one
+// self-contained .html. Each kind collapses to a single <link>/<script src>
+// pointing at the artboard's own filename (multiple <style>/<script> tags —
+// e.g. one for base styles, one for the Fase 08 class library — merge into
+// one file each, empty ones are dropped, and the reference is skipped
+// entirely when there's nothing to link to).
+function cleanExportSplit(ab, base){
+  const built = buildExportClone(ab);
+  if(!built) return { html: DEFAULT_DOC, css: '', js: '' };
+  const doc = built.doc, clone = built.clone;
+
+  const styles = Array.from(clone.querySelectorAll('style')).filter(function(s){ return s.textContent.trim(); });
+  const css = styles.map(function(s){ return s.textContent.trim(); }).join('\n\n');
+  clone.querySelectorAll('style').forEach(function(s){ s.remove(); });
+  if(styles.length){
+    const link = doc.createElement('link');
+    link.setAttribute('rel', 'stylesheet');
+    link.setAttribute('href', base + '.css');
+    clone.querySelector('head').appendChild(link);
+  }
+
+  const scripts = Array.from(clone.querySelectorAll('script:not([src])')).filter(function(s){ return s.textContent.trim(); });
+  const js = scripts.map(function(s){ return s.textContent.trim(); }).join('\n\n');
+  clone.querySelectorAll('script:not([src])').forEach(function(s){ s.remove(); });
+  if(scripts.length){
+    const src = doc.createElement('script');
+    src.setAttribute('src', base + '.js');
+    clone.querySelector('body').appendChild(src);
+  }
+
+  return { html: '<!doctype html>\n' + clone.outerHTML, css: css, js: js };
 }
 
 function pushHistoryFor(ab){
@@ -4061,6 +4105,12 @@ document.getElementById('btnExport').addEventListener('click', function(e){
     { label: 'Apenas CSS', action: function(){
       let doc; try { doc = a.dom.frame.contentDocument; } catch(err){ doc = null; }
       downloadFile(base + '.css', doc ? extractCSSFromDoc(doc) : '', 'text/css');
+    } },
+    { label: 'HTML + CSS + JS separados (' + base + '.html/.css/.js)', action: function(){
+      const parts = cleanExportSplit(a, base);
+      downloadFile(base + '.html', parts.html, 'text/html');
+      if(parts.css) downloadFile(base + '.css', parts.css, 'text/css');
+      if(parts.js) downloadFile(base + '.js', parts.js, 'application/javascript');
     } },
     { separator: true },
     { label: 'Imagem PNG', action: function(){ exportArtboardPNG(a); } },
