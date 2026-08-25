@@ -1,0 +1,74 @@
+:root{
+  --ink:#0f1115; --bg:#0f1115; --bg2:#161920; --bg3:#1c202a; --border:#2b303c;
+  --text:#eef0f4; --text-dim:#9aa1b0; --accent:#35d0a4; --accent2:#28b88f;
+  --accent-soft:rgba(53,208,164,0.15); --on-accent:#06231b; --danger:#ef5b5b; --canvas-bg:#090a0d;
+  --font-display:'Fraunces', Georgia, serif;
+  --font-body:'Manrope', -apple-system, "Segoe UI", sans-serif;
+}
+[data-theme="light"]{
+  --ink:#f4f5f7; --bg:#f4f5f7; --bg2:#ffffff; --bg3:#eceef2; --border:#d9dce2;
+  --text:#0f1115; --text-dim:#666e7d; --accent:#25a07c; --accent2:#1e8768;
+  --accent-soft:rgba(37,160,124,0.15); --on-accent:#ffffff; --danger:#c9333d; --canvas-bg:#e2e5eb;
+}
+*{box-sizing:border-box;}
+html,body{height:100%;margin:0;}
+body{
+  display:flex; flex-direction:column; height:100vh; overflow:hidden;
+  font:13.5px/1.45 var(--font-body);
+  background:var(--bg); color:var(--text);
+  -webkit-font-smoothing:antialiased;
+}
+button{
+  font:inherit; color:var(--text); background:var(--bg3); border:1px solid var(--border);
+  border-radius:7px; padding:5px 10px; cursor:pointer; font-weight:600; font-size:12.5px;
+  transition:all .15s ease;
+}
+button:hover{background:var(--accent); border-color:var(--accent); color:var(--on-accent);}
+button.active{background:var(--accent); border-color:var(--accent); color:var(--on-accent);}
+button:disabled{opacity:.4; cursor:not-allowed;}
+button:disabled:hover{background:var(--bg3); color:var(--text); border-color:var(--border);}
+input[type=text], input[type=number], select, textarea{
+  font:inherit; color:var(--text); background:var(--bg3); border:1px solid var(--border);
+  border-radius:7px; padding:5px 8px; width:100%; transition:border-color .15s ease, box-shadow .15s ease;
+}
+input[type=text]:focus, input[type=number]:focus, select:focus, textarea:focus{
+  outline:none; border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft);
+}
+/* the native up/down spinner makes these tiny fields fiddly to click into
+   and type over — every numeric field here is used by typing, not by
+   nudging the stepper, so drop it. */
+input[type=number]{-moz-appearance:textfield;}
+input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button{
+  -webkit-appearance:none; margin:0;
+}
+input[type=color]{width:32px; height:26px; padding:1px; border-radius:6px; border:1px solid var(--border); background:var(--bg3); cursor:pointer;}
+label{display:block; font-size:11px; font-weight:600; color:var(--text-dim); margin-bottom:3px; text-transform:uppercase; letter-spacing:.02em;}
+hr{border:none; border-top:1px solid var(--border); margin:12px 0;}
+
+/* Figma-style compact field: a short icon/letter chip fused to the left
+   edge of the input, replacing a separate label-above-input row — used
+   for the properties panel's dense numeric grids (size, position,
+   corners, padding, margin) so 4 fields fit on one line instead of 4. */
+.iconField{
+  display:flex; align-items:stretch; background:var(--bg3); border:1px solid var(--border);
+  border-radius:7px; overflow:hidden; transition:border-color .15s ease, box-shadow .15s ease;
+}
+.iconField:focus-within{border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft);}
+.iconFieldPrefix{
+  display:flex; align-items:center; justify-content:center; min-width:20px; padding:0 6px;
+  background:var(--bg2); color:var(--text-dim); font-size:10px; font-weight:700;
+  text-transform:uppercase; letter-spacing:.02em; border-right:1px solid var(--border);
+  user-select:none; flex-shrink:0;
+}
+.iconField input{
+  border:none !important; background:transparent !important; border-radius:0 !important;
+  padding:5px 8px !important; flex:1; min-width:0; box-shadow:none !important;
+}
+.iconField input:focus{outline:none; box-shadow:none;}
+.fieldRow .iconField{flex:1; min-width:0;}
+
+.is-hidden{display:none;}
+
+::-webkit-scrollbar{width:8px; height:8px;}
+::-webkit-scrollbar-thumb{background:var(--border); border-radius:4px;}
+::-webkit-scrollbar-track{background:transparent;}

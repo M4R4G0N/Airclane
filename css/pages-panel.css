@@ -1,0 +1,31 @@
+/* Pages / Layers side tabs (Fase 15 · Lote 4) */
+#layersPanel .sideTabs{
+  display:flex; gap:2px; background:var(--bg); border:1px solid var(--border);
+  border-radius:7px; padding:2px; margin-bottom:10px;
+}
+#layersPanel .sideTabs button{
+  flex:1; border:none; background:transparent; color:var(--text-dim);
+  font-size:11px; font-weight:600; padding:4px 0; border-radius:5px;
+}
+#layersPanel .sideTabs button.active{background:var(--accent); color:var(--on-accent);}
+#layersPanel .sideTabs button:hover:not(.active){background:var(--bg3); color:var(--text);}
+
+.pageRow{
+  display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:7px;
+  cursor:pointer; border:1px solid transparent; margin-bottom:2px;
+}
+.pageRow:hover{background:var(--bg3);}
+.pageRow.active{background:var(--accent-soft); border-color:var(--accent);}
+.pageRowName{
+  flex:1; min-width:0; font-size:12.5px; font-weight:600;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.pageRowDims{color:var(--text-dim); font-size:10.5px; flex:none;}
+.pageRowActions{display:none; gap:2px; flex:none;}
+.pageRow:hover .pageRowActions, .pageRow.active .pageRowActions{display:flex;}
+.pageRowBtn{
+  border:none; background:transparent; color:var(--text-dim); padding:1px 5px;
+  font-size:12px; border-radius:5px;
+}
+.pageRowBtn:hover{background:var(--bg); color:var(--text);}
+#btnNewPage{width:100%; margin-top:8px;}

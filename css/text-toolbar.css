@@ -1,0 +1,16 @@
+/* floating Bold/Italic/Underline/size bar, shown above a text selection
+   while inline-editing (double-click) an element — positioned in JS via
+   updateTextFormatBar, same coordinate mapping as the eyedropper loupe. */
+.textFormatBar{
+  position:fixed; display:none; align-items:center; gap:2px; z-index:2000;
+  background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:4px;
+  box-shadow:0 8px 24px rgba(0,0,0,.4); transform:translate(-50%, calc(-100% - 10px));
+}
+.textFormatBar.open{display:flex;}
+.textFormatBar button{
+  width:26px; height:26px; padding:0; border:none; background:transparent; color:var(--text);
+  border-radius:5px; cursor:pointer; font-size:13px;
+}
+.textFormatBar button:hover{background:var(--bg3);}
+.textFormatBar #tfbSizeDown, .textFormatBar #tfbSizeUp{width:auto; padding:0 6px; font-size:12px;}
+.textFormatBar .tfbSep{width:1px; height:18px; background:var(--border); margin:0 2px;}

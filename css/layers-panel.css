@@ -1,0 +1,40 @@
+/* layers tree */
+.layersSearchInput{margin-bottom:8px; font-size:12px; padding:6px 8px;}
+.propsSearchInput{
+  margin-bottom:10px; font-size:12px; padding:6px 8px;
+  position:sticky; top:0; z-index:2; background:var(--bg2);
+}
+#layersTree{display:flex; flex-direction:column; gap:2px;}
+.layerRow{
+  display:flex; align-items:center; gap:6px; height:30px; padding:0 8px; border-radius:6px;
+  cursor:pointer; border:1px solid transparent; transition:background .1s ease;
+}
+.layerRow:hover{background:var(--bg3);}
+.layerRow.selected{background:var(--accent); border-color:var(--accent); color:var(--on-accent);}
+.layerRow.selected .tag{color:var(--on-accent); font-weight:600;}
+.layerRow.selected .icons button{color:var(--on-accent);}
+.layerRow.selected .icons button:hover{color:var(--danger);}
+.layerRow.multiSelected{border-color:var(--accent); border-style:dashed; background:var(--accent-soft);}
+.layerRow.dropTarget{border-color:var(--accent); background:var(--accent-soft);}
+.layerRow.rootRow{color:var(--text-dim); font-style:italic; margin-bottom:6px; padding-bottom:8px; border-bottom:1px solid var(--border); border-radius:0; height:auto;}
+.layerRow .grip{flex-shrink:0; width:10px; text-align:center; opacity:0; color:var(--text-dim); font-size:11px; letter-spacing:-1px;}
+.layerRow:hover .grip{opacity:.6;}
+.layerRow .chevron{
+  flex-shrink:0; width:14px; height:14px; display:flex; align-items:center; justify-content:center;
+  background:none; border:none; padding:0; color:var(--text-dim); font-size:9px;
+  transform:rotate(90deg); transition:transform .1s;
+}
+.layerRow .chevron.collapsed{transform:rotate(0deg);}
+.layerRow .chevron:hover{color:var(--text);}
+.layerRow .chevronSpacer{flex-shrink:0; width:14px;}
+.layerRow .tag{
+  flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-size:12.5px; color:var(--text);
+}
+.layerRow .icons{display:flex; align-items:center; gap:2px; flex-shrink:0;}
+.layerRow .iconBtn{
+  opacity:.4; background:none; border:none; padding:3px 5px; font-size:12px; border-radius:4px; line-height:1;
+}
+.layerRow .iconBtn:hover{opacity:1; background:rgba(0,0,0,.15); color:var(--danger);}
+.layerRow .iconBtn.hidden-state{opacity:.85;}
+#layersEmpty{color:var(--text-dim); font-size:12.5px; padding:12px 0;}

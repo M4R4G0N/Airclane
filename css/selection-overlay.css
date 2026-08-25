@@ -1,0 +1,23 @@
+/* selection overlay */
+.overlayLayer{position:absolute; left:0; top:0; pointer-events:none;}
+.dragCatcher{position:absolute; inset:0; z-index:5; pointer-events:none;}
+.sel-box{position:absolute; border:2px solid var(--accent); pointer-events:none;}
+.sel-box.multi{border-width:1.5px; border-style:dashed; opacity:.8;}
+
+.dragGhost{
+  position:fixed; z-index:300; pointer-events:none; display:none; align-items:center; justify-content:center;
+  border:2px solid var(--accent); border-radius:6px; background:var(--accent-soft);
+  color:var(--text); font-size:11px; padding:2px 6px; overflow:hidden; white-space:nowrap;
+}
+.dragGhost.show{display:flex;}
+.dropHilite{position:absolute; pointer-events:none; z-index:6; display:none;}
+.dropHilite.nest{border:2px dashed var(--accent); border-radius:4px; background:var(--accent-soft); box-sizing:border-box;}
+.dropHilite.line{background:var(--accent); border-radius:2px;}
+.snapGuide{position:absolute; pointer-events:none; z-index:7; background:#ff3d7f;}
+.snapGuide.v{width:1px;}
+.snapGuide.h{height:1px;}
+.handle{position:absolute; width:10px; height:10px; background:var(--accent); border:1.5px solid #fff; border-radius:3px; pointer-events:auto; z-index:2;}
+.handle.nw{cursor:nwse-resize;} .handle.ne{cursor:nesw-resize;} .handle.sw{cursor:nesw-resize;} .handle.se{cursor:nwse-resize;}
+.edge{position:absolute; pointer-events:auto; background:transparent;}
+.edge.n, .edge.s{cursor:ns-resize;} .edge.e, .edge.w{cursor:ew-resize;}
+.edge:hover{background:rgba(53,208,164,.3);}

@@ -6,12 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Arclane is an offline HTML artifact editor: open an `.html` file, edit it visually on a canvas with multiple artboards, edit its real CSS/JS, and save/export back to disk. It runs entirely in the browser — no build step, no framework, no backend, no dependencies.
 
-The project has no build step — all logic used to live in a single `app.js` (~5,700 lines, one IIFE). It has since been split into 25 plain `<script>` files under `js/` (see Architecture below), but the runtime model is unchanged: `index.html` loads them in dependency order and, because none of them wraps itself in its own function/IIFE, their top-level `const`/`let`/`function` declarations all share one global script scope — exactly as if it were still one file. Zero dependencies either way.
+The project has no build step — all logic used to live in a single `app.js` (~5,700 lines, one IIFE). It has since been split into 25 plain `<script>` files under `js/` (see Architecture below), but the runtime model is unchanged: `index.html` loads them in dependency order and, because none of them wraps itself in its own function/IIFE, their top-level `const`/`let`/`function` declarations all share one global script scope — exactly as if it were still one file. Zero dependencies either way. `style.css` (~700 lines) was split the same way, into plain `<link>`-ed files under `css/`, one per UI area — CSS has no scoping concern like the JS files do, but the split still keeps each area's rules next to the module that manipulates it.
 
 | File / dir | Purpose |
 |---|---|
-| `index.html` | Editor UI structure (toolbar, side panels, canvas, modals) + the ordered `<script src="js/...">` list |
-| `style.css` | Editor UI styling (dark/light theme via CSS vars, panels, overlays) |
+| `index.html` | Editor UI structure (toolbar, side panels, canvas, modals) + the ordered `<link href="css/...">` and `<script src="js/...">` lists |
+| `css/*.css` | Editor UI styling (dark/light theme via CSS vars, panels, overlays), split by concern — one file per UI area, mirroring the `js/` split |
 | `js/*.js` | All application logic, split by concern (see Architecture) |
 
 Each artboard is a user-imported/created HTML document rendered inside a sandboxed `<iframe>`, with an edit overlay drawn on top for selecting/moving/resizing elements. Edits sync bidirectionally between the visual canvas and the artboard's underlying HTML/CSS/JS.

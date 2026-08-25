@@ -1,0 +1,33 @@
+#bottomBar{
+  position:absolute; left:50%; bottom:16px; transform:translateX(-50%); z-index:15;
+  display:flex; align-items:center; gap:4px; padding:6px 8px; border-radius:10px;
+  background:var(--bg2); border:1px solid var(--border); box-shadow:0 10px 30px rgba(0,0,0,.35);
+}
+#bottomBar button{padding:6px 10px;}
+#artboardsRow{position:relative; min-width:6000px; min-height:4000px; transform-origin: top left;}
+
+.artboardWrap{position:absolute; display:flex; flex-direction:column; gap:8px;}
+.artboardTitleWrap{display:flex; align-items:baseline; gap:8px; padding:0 2px; cursor:grab; user-select:none;}
+.artboardTitleWrap:active{cursor:grabbing;}
+.artboardTitle{
+  font-size:13px; font-weight:700; color:var(--text-dim); white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; max-width:220px; font-family:var(--font-body);
+}
+.artboardWrap.active .artboardTitle{color:var(--accent);}
+.artboardDims{font-size:11px; color:var(--text-dim); opacity:.7; white-space:nowrap;}
+.artboardTitleInput{font-size:13px; font-weight:700; padding:2px 5px; max-width:220px; border-radius:5px;}
+.artboardStage{position:relative; flex-shrink:0; border-radius:4px;}
+.artboardStage .artboardFrame{
+  display:block; border:none; box-shadow:0 0 0 1px rgba(0,0,0,.4), 0 24px 60px rgba(0,0,0,.5);
+  border-radius:4px; background:#ffffff; transition:opacity .1s ease;
+}
+.artboardWrap.selected .artboardStage{outline:2px solid var(--accent); outline-offset:6px; border-radius:4px;}
+
+.addArtboardTile{
+  position:absolute; width:220px; height:160px; margin-top:28px;
+  display:flex; align-items:center; justify-content:center; flex-direction:column; gap:6px;
+  border:1.5px dashed var(--border); border-radius:12px; background:transparent; color:var(--text-dim);
+  cursor:pointer; font-size:13px; font-weight:600; transition:all .15s ease;
+}
+.addArtboardTile:hover{border-color:var(--accent); color:var(--accent); background:var(--accent-soft);}
+.addArtboardTile .plus{font-size:24px; line-height:1;}
