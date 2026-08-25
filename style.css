@@ -621,3 +621,15 @@
 
   /* checkbox rows already lay out horizontally — just stop them stretching */
   #propsPanel .checkField{margin-bottom:5px;}
+
+  /* gradient fill editor (Fase 15 · Lote 3) */
+  #propsPanel .is-hidden{display:none;}
+  #propsPanel .gradientPreview{
+    height:26px; border-radius:6px; border:1px solid var(--border);
+    background:var(--bg3); margin-bottom:6px;
+  }
+  #propsPanel .gradientStop{display:flex; align-items:center; gap:5px; margin-bottom:5px;}
+  #propsPanel .gradientStop .colorSwatchBtn{width:26px; height:26px; flex:none;}
+  #propsPanel .gradientStop input[type="number"]{width:56px; flex:none;}
+  #propsPanel .gradientStopPct{color:var(--text-dim); font-size:10px;}
+  #propsPanel .gradientStop .gradientStopRemove{padding:2px 7px;}

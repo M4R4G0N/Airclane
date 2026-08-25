@@ -244,9 +244,10 @@ function renderProps(){
 
     '<div class="propsSection">Cor</div>' +
     '<div class="row2">' +
-      '<div class="field"><label>Fundo</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pBg', cs.backgroundColor) + varDropdownHTML(doc, el.style.backgroundColor || el.style.background, 'pBgVar') + '</div></div>' +
+      '<div class="field' + ((el.style.backgroundImage || '').indexOf('gradient(') !== -1 ? ' is-hidden' : '') + '" id="pSolidFillRow"><label>Fundo</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pBg', cs.backgroundColor) + varDropdownHTML(doc, el.style.backgroundColor || el.style.background, 'pBgVar') + '</div></div>' +
       '<div class="field"><label>Texto</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pColor', cs.color) + varDropdownHTML(doc, el.style.color, 'pColorVar') + '</div></div>' +
     '</div>' +
+    gradientFillHTML(el) +
 
     '<div class="propsSection">Aparência</div>' +
     '<div class="row2">' +
@@ -432,7 +433,8 @@ function renderProps(){
   bindPropPrimaryOnly('pY', function(v){ el.style.top = v + 'px'; });
   bindSizeProp('pW', 'pWUnit', 'width');
   bindSizeProp('pH', 'pHUnit', 'height');
-  bindColorSwatch('pBg', function(v, el){ el.style.backgroundColor = v; });
+  bindColorSwatch('pBg', function(v, el){ el.style.backgroundImage = ''; el.style.backgroundColor = v; });
+  bindGradientFill(el);
   bindColorSwatch('pColor', function(v, el){ el.style.color = v; });
   bindProp('pFontFamily', applyFontFamily, 'change');
   bindProp('pFontWeight', function(v, el){ el.style.fontWeight = v; }, 'change');
