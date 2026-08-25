@@ -1090,6 +1090,17 @@ function attachCanvasListeners(ab){
     if(a) e.preventDefault();
   }, true);
 
+  // a <form> has no server to actually submit to — always stop the native
+  // submit (which would otherwise try to reload the iframe), and in
+  // Visualizar mode honor "Navegar para artboard" on the form itself, same
+  // as a button/link with that action.
+  doc.addEventListener('submit', function(e){
+    e.preventDefault();
+    if(state.editMode) return;
+    const gotoId = e.target && e.target.getAttribute && e.target.getAttribute('data-ae-goto');
+    if(gotoId) goToArtboard(gotoId);
+  }, true);
+
   // Ctrl+scroll/pinch-zoom over the rendered artboard fires inside this
   // iframe's own document — it never reaches canvasWrap's wheel listener
   // in the parent page, so without this the browser's native page zoom
@@ -1498,6 +1509,22 @@ function attributesSectionHTML(el, opts){
         '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar — clicar no botão leva até esse artboard, tipo testar "Entrar" indo pra tela seguinte.</div>'
         : '');
   }
+  if(tag === 'FORM'){
+    const gotoId = el.getAttribute('data-ae-goto') || '';
+    const artboardOptions = artboards.map(function(a){
+      return '<option value="' + a.id + '"' + (gotoId === a.id ? ' selected' : '') + '>' + a.name + '</option>';
+    }).join('');
+    return '<div class="propsSection">Formulário</div>' +
+      '<div class="field"><label>Ao enviar (submit)</label><select id="pAttrBtnAction">' +
+        '<option value=""' + (!gotoId ? ' selected' : '') + '>Nada</option>' +
+        '<option value="goto"' + (gotoId ? ' selected' : '') + '>Navegar para artboard</option>' +
+      '</select></div>' +
+      (gotoId ?
+        '<div class="field"><label>Ir para</label><select id="pAttrGotoArtboard">' + artboardOptions + '</select></div>' +
+        '<div class="field" style="color:var(--text-dim); font-size:11.5px;">Funciona no modo Visualizar — envia o formulário (botão type="submit" dentro dele, ou Enter num campo) e vai pra esse artboard, sem recarregar a página de verdade.</div>'
+        : '') +
+      '<div class="field"><label>Action (endereço de envio)</label><input type="text" id="pAttrAction" value="' + esc(el.getAttribute('action')) + '"></div>';
+  }
   return '';
 }
 
@@ -1518,6 +1545,7 @@ function bindAttributesSection(el){
   bindAttr('pAttrHref', 'href');
   bindAttr('pAttrTarget', 'target', 'change');
   bindAttr('pAttrAlt', 'alt');
+  bindAttr('pAttrAction', 'action');
 
   const linkMode = document.getElementById('pAttrLinkMode');
   if(linkMode){
@@ -1546,8 +1574,8 @@ function bindAttributesSection(el){
   const gotoSel = document.getElementById('pAttrGotoArtboard');
   if(gotoSel){
     gotoSel.addEventListener('change', function(){
-      if(el.tagName === 'BUTTON') el.setAttribute('data-ae-goto', this.value);
-      else el.setAttribute('href', '#ae-goto:' + this.value);
+      if(el.tagName === 'A') el.setAttribute('href', '#ae-goto:' + this.value);
+      else el.setAttribute('data-ae-goto', this.value);
       pushHistory(); syncCodeFromCanvas();
     });
   }
@@ -2233,6 +2261,11 @@ const ELEMENT_TEMPLATES = {
   footer: { label: 'Footer', build: function(doc){
     const el = doc.createElement('footer');
     el.style.cssText = 'padding:16px 0; color:#666; font-size:13px; margin:0 0 12px;';
+    return el;
+  } },
+  form: { label: '▤ Formulário', build: function(doc){
+    const el = doc.createElement('form');
+    el.style.cssText = 'display:block; margin:0 0 12px;';
     return el;
   } },
   input: { label: 'Input (campo)', build: function(doc){

@@ -47,7 +47,7 @@ O essencial pra abrir um artifact, mexer nele e salvar de volta.
 
 ### FASE 02 · Formas e elementos `parcial`
 Adicionar coisas novas ao artifact, não só editar o que já existe.
-- Menu "+ Elemento": div, texto, span, parágrafo, título, botão, link, lista, tabela, nav, section, header, footer, input, imagem
+- Menu "+ Elemento": div, texto, span, parágrafo, título, botão, link, lista, tabela, nav, section, header, footer, **formulário**, input, imagem
 - Controle de display (block, flex, inline-block, grid, none) e position no painel
 - Tabela: adicionar linha / adicionar coluna pelo menu de contexto
 - Lista: adicionar item pelo menu de contexto
@@ -55,6 +55,14 @@ Adicionar coisas novas ao artifact, não só editar o que já existe.
 - Linha e elipse/círculo
 - Agrupar / desagrupar elementos
 - Ferramenta de copiar estilo (pincel / eyedropper) entre elementos
+- **Elementos HTML que ainda faltam no catálogo:**
+  - Títulos: `h2`–`h6` (hoje só tem `h1`)
+  - Listas: `ol` (só tem `ul`), item de lista (`li`) avulso
+  - Texto: `blockquote`, `strong`/`em`/`b`/`i`, `code`/`pre`, `br`
+  - Semântico: `article`, `aside`, `main`, `figure`/`figcaption`
+  - Formulário: `label` avulso, `fieldset`/`legend`
+  - Mídia: `video`, `audio`, `iframe` (embed)
+  - Interativo: `details`/`summary`, `progress`, `meter`
 
 ### FASE 03 · Camadas e organização `parcial`
 Enxergar e organizar a estrutura do artifact, não só os pixels.
