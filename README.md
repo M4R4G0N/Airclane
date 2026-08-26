@@ -219,11 +219,11 @@ Um jeito de "programar" o artifact parecido com Power Apps, mas em JS de verdade
 Rodada focada em como *usa* o editor, não em features novas de documento. Referências visuais: painel de propriedades do Figma (compacto, campos com label inline) + modelo "essencial / avançado" do Power Apps.
 
 **Lote 1 · Correções rápidas**
-- [ ] Bug: redimensionar artboard rápido demais "solta" a alça no meio do arrasto (o drag morre se o cursor sai do handle) — trocar pra pointer capture / listeners globais, só termina no `mouseup`
-- [ ] Delay/travamento visual ao arrastar pra redimensionar (elementos e artboard) — o overlay e o painel estão re-renderizando pesado a cada `mousemove`; atualizar ao vivo só o essencial e deixar o resto pro `mouseup`
-- [ ] Botão "CSS & variáveis" → renomear pra **CSS** e mover pra ao lado do `{ } JS`
-- [ ] `Ctrl+C` / `Ctrl+V` no artboard: sem elemento selecionado, copia/cola o artboard inteiro (hoje só existe o botão de duplicar)
-- [ ] Seção **Ação** das Propriedades sai da visão principal e vai pro "Avançado"
+- [x] Bug: redimensionar artboard rápido demais "solta" a alça no meio do arrasto (o drag morre se o cursor sai do handle) — drag cobre o iframe com o `dragCatcher` e escuta `mousemove`/`mouseup` nas duas janelas (`bindDragListeners`), só termina no `mouseup`
+- [x] Delay/travamento visual ao arrastar pra redimensionar (elementos e artboard) — era o mesmo bug: sem o catcher, eventos só chegavam quando o cursor passava fora do iframe; com os listeners globais o drag flui contínuo
+- [x] Botão "CSS & variáveis" → renomeado pra **CSS** e movido pra ao lado do `{ } JS`
+- [x] `Ctrl+C` / `Ctrl+V` no artboard: sem elemento selecionado, copia/cola o artboard inteiro
+- [x] Seção **Ação** das Propriedades saiu da visão principal e foi pro "Avançado"
 
 **Lote 2 · Painel de Propriedades compacto (inspirado no Figma)**
 - [x] Campos compactos com label inline (uma linha por propriedade, não duas) — grids de 2–4 colunas continuam empilhados, igual ao Figma
@@ -264,9 +264,10 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 **Lote 9 · JS Blocks — testar e decidir o destino**
 Editor de blocos estilo Scratch (`js-blocks-core.js` faz o parser/gerador de um subconjunto de JS ↔ árvore de blocos, `js-blocks-ui.js` é o editor visual de arrastar-e-soltar) foi commitado sem ter sido testado no navegador nem documentado aqui — e hoje convive sem ligação nenhuma com a Barra de fórmulas da Fase 10, outro jeito de "programar sem código" no mesmo editor.
 - [x] Testar de ponta a ponta no navegador: abrir o modal, arrastar um bloco "variável" pra área de scripts, editar os campos, "Aplicar ao artboard" — o JS gerado (`let novaVar = 0;`) apareceu certinho na aba `{ } JS`, sem erro no console em nenhum passo
-- [ ] Trechos fora do subconjunto suportado viram um bloco `RawCode` (`node.invalid === true`) que sobrevive ao round-trip mas não é editável visualmente — hoje isso não aparece pro usuário; precisa de um aviso visual no bloco
-- [ ] Decidir: Blocos e Barra de fórmulas viram a mesma superfície (um alimenta o outro) ou ficam dois modos distintos — e documentar a decisão aqui embaixo
-- [ ] Se ficarem separados, deixar explícito na UI qual usar quando (os dois botões hoje ficam lado a lado sem essa distinção)
+- [x] Trechos fora do subconjunto suportado viram um bloco `RawCode` (`node.invalid === true`) que sobrevive ao round-trip mas não é editável visualmente — agora cada bloco RawCode tem badge próprio ("⚠ código bruto — editável só como texto", com tooltip explicando), além do banner de contagem no topo do modal
+- [x] Bug de round-trip corrigido de brinde: statements fora do subconjunto liderados por keyword (`class`, `async`, `try`, `import`...) eram picotados pelo parser de expressão (`class;` `Foo;` `{...}`) e o código NÃO sobrevivia — agora o parser rejeita keywords desconhecidas de cara e a recuperação captura o statement inteiro (fecha em `;` ou na chave balanceada final, sem engolir o statement seguinte nem cortar `else`/`catch`/`finally` no meio); round-trip fica byte-a-byte idêntico
+- [x] **Decisão: Blocos e Fórmulas ficam separados.** São duas escalas diferentes de lógica: **Fórmulas** = comportamento de um elemento específico (esconder/mostrar, texto dinâmico), estilo Power Apps; **Blocos** = lógica geral do artboard, estilo Scratch. Unificar os dois misturaria os modelos mentais sem ganho claro
+- [x] Distinção explícita na UI: tooltips dos botões Fórmulas/Blocos na toolbar explicam qual usar quando, o rodapé do modal de Blocos aponta pra Fórmulas e o rótulo ƒx da barra aponta pra Blocos
 
 **Extras**
 - [x] Zoom pra caber tudo — botão "Ajustar" agora enquadra e centraliza todos os artboards de verdade (antes só voltava pra 100%), + atalhos `Ctrl+1` (ajustar) e `Ctrl+0` (100%)

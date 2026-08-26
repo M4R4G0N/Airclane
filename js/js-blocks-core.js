@@ -8,7 +8,14 @@
 
 const JS_BLOCKS_KEYWORDS = new Set([
   'const', 'let', 'var', 'if', 'else', 'for', 'while', 'function', 'return',
-  'break', 'continue', 'true', 'false', 'null', 'undefined', 'of', 'in', 'new', 'typeof'
+  'break', 'continue', 'true', 'false', 'null', 'undefined', 'of', 'in', 'new', 'typeof',
+  // outside the supported subset — tokenized as keywords (not names) so the
+  // statement parser can reject them up front and recover the statement
+  // whole, as one RawCode block, instead of shredding it into bogus
+  // identifier statements ('class;' 'Foo;' ...)
+  'class', 'extends', 'async', 'await', 'try', 'catch', 'finally', 'switch',
+  'case', 'default', 'do', 'throw', 'import', 'export', 'instanceof', 'void',
+  'delete', 'yield'
 ]);
 
 const JS_BLOCKS_TOKEN_SPECS = [
@@ -99,11 +106,13 @@ function jsBlocksParseStatementList(state, terminatorValue) {
 function jsBlocksRecoverRawStatement(state) {
   const startTok = jsBlocksCurrent(state);
   let depth = 0;
+  let sawBrace = false;
   let endTok = startTok;
   while (!jsBlocksAtEnd(state)) {
     const tok = jsBlocksCurrent(state);
     if (tok.type === 'punct' && '{(['.includes(tok.value)) {
       depth++;
+      if (tok.value === '{') sawBrace = true;
     } else if (tok.type === 'punct' && '})]'.includes(tok.value)) {
       if (depth === 0) break;
       depth--;
@@ -111,6 +120,13 @@ function jsBlocksRecoverRawStatement(state) {
     endTok = tok;
     jsBlocksAdvance(state);
     if (depth === 0 && tok.type === 'punct' && tok.value === ';') break;
+    // keyword-led statements like `class X { ... }` don't end in ';' — a
+    // balanced closing brace ends them. Don't stop when else/catch/finally
+    // continues the same statement (a dangling `else` would be a syntax error).
+    if (depth === 0 && sawBrace && tok.type === 'punct' && tok.value === '}') {
+      const next = jsBlocksCurrent(state);
+      if (!(next && next.type === 'keyword' && ['else', 'catch', 'finally'].includes(next.value))) break;
+    }
   }
   return state.source.slice(startTok.start, endTok.end);
 }
@@ -130,6 +146,12 @@ function jsBlocksParseStatement(state) {
       case 'break': jsBlocksAdvance(state); jsBlocksMatch(state, 'punct', ';'); return { type: 'Break' };
       case 'continue': jsBlocksAdvance(state); jsBlocksMatch(state, 'punct', ';'); return { type: 'Continue' };
     }
+    // keyword-led statements outside the subset (class, async, import, try,
+    // switch...) must never fall through to the expression parser — it would
+    // shred them into bogus identifier statements ('class;' 'Foo;' ...) and
+    // the code would NOT survive the round-trip. Throw so the caller's
+    // recovery grabs the whole statement as one intact RawCode block.
+    throw new Error('unsupported statement keyword: ' + tok.value);
   }
   return jsBlocksParseExpressionStatement(state);
 }

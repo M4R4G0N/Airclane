@@ -439,6 +439,7 @@ function jsBlocksRenderStatementFields(node, head){
       head.appendChild(jsBlocksExprInput(function(){ return node.expression; }, function(v){ node.expression = v; }, 'expressão'));
       break;
     case 'RawCode':
+      head.appendChild(jsBlocksRawWarning());
       head.appendChild(jsBlocksRawCodeField(node));
       break;
   }
@@ -556,6 +557,17 @@ function jsBlocksForInitInput(forNode){
   input.addEventListener('blur', commit);
   input.addEventListener('keydown', function(e){ if(e.key === 'Enter') input.blur(); });
   return input;
+}
+
+// RawCode blocks hold JS outside the supported subset: they round-trip and
+// run fine, but can't be edited as blocks — the badge says that on the
+// block itself, not just in the banner at the top of the modal.
+function jsBlocksRawWarning(){
+  const badge = document.createElement('span');
+  badge.className = 'jsBlockRawWarning';
+  badge.textContent = '⚠ código bruto — editável só como texto';
+  badge.title = 'Este trecho está fora do subconjunto de JS que vira bloco. Ele é preservado no round-trip e roda normalmente, mas só pode ser editado como texto aqui — ou vira bloco de novo se você reescrever dentro do subconjunto.';
+  return badge;
 }
 
 function jsBlocksRawCodeField(node){

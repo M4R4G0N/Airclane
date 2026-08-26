@@ -157,3 +157,10 @@
   position:fixed; z-index:1999; height:3px; border-radius:2px; background:var(--accent);
   box-shadow:0 0 0 3px var(--accent-soft); pointer-events:none; display:none;
 }
+
+/* RawCode badge: the block-level warning that this chunk fell outside the
+   supported JS subset (the modal's top banner counts them; this marks each) */
+.jsBlockRawWarning{
+  flex:1 1 100%; font-size:10px; font-weight:600; color:var(--danger);
+  cursor:help;
+}
