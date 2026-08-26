@@ -4,7 +4,7 @@ Leitor e editor de artifacts, offline. App HTML, sem servidor e sem dependência
 
 - **Local:** `ArtifactEditor/` (`index.html` + `style.css` + `app.js`)
 - **Stack:** HTML + CSS + JS puro, sem build
-- **Fase atual:** 1–14 concluídas 🎉
+- **Fase atual:** 1–14 concluídas · 15 em andamento
 
 ---
 
@@ -26,8 +26,12 @@ Leitor e editor de artifacts, offline. App HTML, sem servidor e sem dependência
 - [x] **13. Redesenho da interface**
 - [x] **14. Ajustes finos do editor**
 
+### — Em andamento —
+- [ ] **15. UX do editor** — Lote 1 (correções rápidas), Lote 9 (JS Blocks) pendentes
+
 ### — Planejado —
-_(nada por aqui — todas as fases concluídas)_
+- [ ] **16. Responsividade**
+- [ ] **17. Estados e interação avançada**
 
 ---
 
@@ -257,8 +261,37 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 - [x] Lista: estilo do marcador (`list-style-type`)
 - [x] Imagem: `object-fit` e `object-position`
 
+**Lote 9 · JS Blocks — testar e decidir o destino**
+Editor de blocos estilo Scratch (`js-blocks-core.js` faz o parser/gerador de um subconjunto de JS ↔ árvore de blocos, `js-blocks-ui.js` é o editor visual de arrastar-e-soltar) foi commitado mas ainda não passou por teste no navegador nem foi documentado aqui — e hoje convive sem ligação nenhuma com a Barra de fórmulas da Fase 10, outro jeito de "programar sem código" no mesmo editor.
+- [ ] Testar de ponta a ponta no navegador: montar um bloco, gerar o JS, aplicar no artboard, reabrir e conferir que o parser reimporta o script sem perder nada
+- [ ] Trechos fora do subconjunto suportado viram um bloco `RawCode` (`node.invalid === true`) que sobrevive ao round-trip mas não é editável visualmente — hoje isso não aparece pro usuário; precisa de um aviso visual no bloco
+- [ ] Decidir: Blocos e Barra de fórmulas viram a mesma superfície (um alimenta o outro) ou ficam dois modos distintos — e documentar a decisão aqui embaixo
+- [ ] Se ficarem separados, deixar explícito na UI qual usar quando (os dois botões hoje ficam lado a lado sem essa distinção)
+
 **Extras**
 - [x] Zoom pra caber tudo — botão "Ajustar" agora enquadra e centraliza todos os artboards de verdade (antes só voltava pra 100%), + atalhos `Ctrl+1` (ajustar) e `Ctrl+0` (100%)
 - [x] `F2` com elemento selecionado abre a renomeação inline na camada (igual duplo clique no nome)
 - [x] **Cores recentes** no seletor de cor: as últimas 16 cores escolhidas aparecem primeiro na paleta (localStorage), substituindo a lista fixa como protagonista
 - [x] Paleta fixa antiga virou complemento — preenche o restante da fileira depois das recentes
+
+---
+
+## — Planejado —
+
+### FASE 16 · Responsividade `planejado`
+O maior buraco real da ferramenta hoje: cada artboard é uma tela de tamanho fixo — mobile/tablet/desktop são artboards separados (presets), não breakpoints do mesmo layout. Sem isso, todo artifact exportado só funciona bem numa única largura.
+- [ ] Decidir o modelo: breakpoints dentro do mesmo artboard (um layout, várias larguras simuladas, estilo Webflow) vs. media queries geradas a partir de overrides por breakpoint no painel de Propriedades
+- [ ] Seletor de breakpoint na barra do canvas (ex: 375 / 768 / 1440px) que redimensiona o artboard ativo sem trocar de artboard
+- [ ] Painel de Propriedades: qualquer campo pode ganhar um valor "só nesse breakpoint" — indicador visual (ponto/cor) nos campos que têm override no breakpoint atual, pra não perder de vista o que é global e o que é específico
+- [ ] Exportação gera `@media (min-width: ...)` de verdade, um bloco por breakpoint que tiver pelo menos um override
+- [ ] Mobile-first: a regra base é sempre a tela menor, breakpoints maiores só sobrescrevem — já é a convenção de CSS combinada no `CLAUDE.md`, o gerador de export precisa seguir a mesma regra
+- [ ] Migração: artboards já criados com os presets antigos (desktop/tablet/mobile como artboards separados) continuam funcionando soltos — breakpoints é um recurso novo por cima, não substitui o que já existe
+
+### FASE 17 · Estados e interação avançada `planejado`
+Fecha os gaps de CSS que sobraram depois da Fase 15 · Lote 8 — tudo que precisa de mais que "um valor fixo" pra funcionar de verdade.
+- [ ] Pseudo-classes (`:hover`, `:focus`, `:active`) editáveis visualmente — provavelmente um seletor de "estado" no topo do painel de Propriedades (como o "Exibir/Avançado" de hoje), que edita a regra da classe correspondente em vez do estilo inline do elemento
+- [ ] `transition`: propriedade, duração, easing e delay, com um jeito visual de escolher (não só um campo de texto cru)
+- [ ] Filtros CSS que faltam: brightness, contrast, saturate, grayscale, sepia, hue-rotate (hoje só tem blur e o backdrop-blur da Fase 15 · Lote 8)
+- [ ] `mix-blend-mode`
+- [ ] `clip-path` — pelo menos os presets mais comuns (círculo, elipse, polígono, inset), sem exigir escrever o path na mão
+- [ ] Múltiplos backgrounds — hoje imagem de fundo, padrão de pontos/grade e gradiente competem pelo mesmo `background-image`/slot único (o último aplicado vence); dá pra empilhar mais de um ao mesmo tempo
