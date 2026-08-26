@@ -245,6 +245,18 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 **Lote 7 · Depois**
 - [ ] Barra de fórmulas — repensar UX (adiado por decisão)
 
+**Lote 8 · Cobertura completa de propriedades CSS (Avançado)**
+- [x] Sombra (box-shadow) e sombra de texto (text-shadow): X/Y/blur + cor, cada uma na própria seção colapsável
+- [x] Transformação: rotação (graus) e escala (%), um único `transform` reconstruído a partir dos dois campos
+- [x] Imagem de fundo (foto): URL colável ou upload de arquivo (data URL), com controle de ajuste (cover/contain/auto) — convive com o padrão de pontos/grade e o fill em gradiente existentes, o último aplicado vence
+- [x] Grid: colunas/linhas (`grid-template-columns/rows`), alinhamento e gap, mostrados só quando o display é grid/inline-grid
+- [x] Borda por lado independente (T/R/B/L) com botão de vincular — antes só existia uma espessura única para os 4 lados
+- [x] Tamanho: min/max largura e altura, `box-sizing`, `aspect-ratio`
+- [x] Layout: `float`, `clear`, `overflow`, `visibility`, `vertical-align`
+- [x] Texto: alinhamento, transformação (maiúsculas etc.), truncar com reticências, altura de linha, espaçamento entre letras, decoração, cursor, itálico
+- [x] Lista: estilo do marcador (`list-style-type`)
+- [x] Imagem: `object-fit` e `object-position`
+
 **Extras**
 - [x] Zoom pra caber tudo — botão "Ajustar" agora enquadra e centraliza todos os artboards de verdade (antes só voltava pra 100%), + atalhos `Ctrl+1` (ajustar) e `Ctrl+0` (100%)
 - [x] `F2` com elemento selecionado abre a renomeação inline na camada (igual duplo clique no nome)
