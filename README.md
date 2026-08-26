@@ -262,8 +262,8 @@ Rodada focada em como *usa* o editor, não em features novas de documento. Refer
 - [x] Imagem: `object-fit` e `object-position`
 
 **Lote 9 · JS Blocks — testar e decidir o destino**
-Editor de blocos estilo Scratch (`js-blocks-core.js` faz o parser/gerador de um subconjunto de JS ↔ árvore de blocos, `js-blocks-ui.js` é o editor visual de arrastar-e-soltar) foi commitado mas ainda não passou por teste no navegador nem foi documentado aqui — e hoje convive sem ligação nenhuma com a Barra de fórmulas da Fase 10, outro jeito de "programar sem código" no mesmo editor.
-- [ ] Testar de ponta a ponta no navegador: montar um bloco, gerar o JS, aplicar no artboard, reabrir e conferir que o parser reimporta o script sem perder nada
+Editor de blocos estilo Scratch (`js-blocks-core.js` faz o parser/gerador de um subconjunto de JS ↔ árvore de blocos, `js-blocks-ui.js` é o editor visual de arrastar-e-soltar) foi commitado sem ter sido testado no navegador nem documentado aqui — e hoje convive sem ligação nenhuma com a Barra de fórmulas da Fase 10, outro jeito de "programar sem código" no mesmo editor.
+- [x] Testar de ponta a ponta no navegador: abrir o modal, arrastar um bloco "variável" pra área de scripts, editar os campos, "Aplicar ao artboard" — o JS gerado (`let novaVar = 0;`) apareceu certinho na aba `{ } JS`, sem erro no console em nenhum passo
 - [ ] Trechos fora do subconjunto suportado viram um bloco `RawCode` (`node.invalid === true`) que sobrevive ao round-trip mas não é editável visualmente — hoje isso não aparece pro usuário; precisa de um aviso visual no bloco
 - [ ] Decidir: Blocos e Barra de fórmulas viram a mesma superfície (um alimenta o outro) ou ficam dois modos distintos — e documentar a decisão aqui embaixo
 - [ ] Se ficarem separados, deixar explícito na UI qual usar quando (os dois botões hoje ficam lado a lado sem essa distinção)
