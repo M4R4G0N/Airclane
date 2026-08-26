@@ -28,11 +28,11 @@ let toggleTargetCandidates = [];
 // freshly selected element in "Avançado" doesn't dump everything expanded
 // at once — the user can still expand/collapse any of them, and that choice
 // is remembered same as before.
-let collapsedPropsSections = new Set(['Cantos', 'Padding', 'Margin', 'Borda', 'Regra CSS da classe']);
+let collapsedPropsSections = new Set(['Cantos', 'Padding', 'Margin', 'Borda', 'Sombra', 'Sombra do texto', 'Regra CSS da classe']);
 // section headers always visible in the "Exibir" (simple) props view —
 // everything else only shows in "Avançado". "Ação" lives in Avançado only:
 // wiring behavior is a power-user move, not an everyday adjustment.
-const PROPS_SIMPLE_SECTIONS = ['Texto', 'Container', 'Lista', 'Mídia', 'Indicador', 'Layout', 'Cor'];
+const PROPS_SIMPLE_SECTIONS = ['Texto', 'Container', 'Lista', 'Mídia', 'Indicador', 'Layout', 'Cor', 'Cantos', 'Padding', 'Margin', 'Borda', 'Tamanho', 'Sombra', 'Sombra do texto'];
 
 const state = {
   zoom: 1,

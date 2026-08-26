@@ -145,12 +145,39 @@ function renderProps(){
   const displayVal = el.style.display || cs.display;
   const positionVal = el.style.position || cs.position;
   const isFlex = displayVal === 'flex' || displayVal === 'inline-flex';
+  const isGrid = displayVal === 'grid' || displayVal === 'inline-grid';
   const free = positionVal === 'absolute' || positionVal === 'fixed';
 
   function opts(list, current){
     return list.map(function(v){ return '<option value="' + v + '"' + (v === current ? ' selected' : '') + '>' + v + '</option>'; }).join('');
   }
   function px(v){ return Math.round(parseFloat(v)) || 0; }
+  function pxOrEmpty(v){ return v ? Math.round(parseFloat(v)) : ''; }
+  // reads only the author-set inline transform/box-shadow (not the computed
+  // matrix()/rgb() form) so re-opening the panel shows back the values the
+  // user actually typed, not a browser-normalized equivalent.
+  function parseTransform(str){
+    const rotateMatch = (str || '').match(/rotate\((-?[\d.]+)deg\)/);
+    const scaleMatch = (str || '').match(/scale\(([\d.]+)\)/);
+    return {
+      rotate: rotateMatch ? Math.round(parseFloat(rotateMatch[1])) : 0,
+      scale: scaleMatch ? Math.round(parseFloat(scaleMatch[1]) * 100) : 100
+    };
+  }
+  function parseShadow(str){
+    if(!str || str === 'none') return { x: 0, y: 0, blur: 0, color: 'rgba(0,0,0,0.25)' };
+    const offsets = str.match(/(-?[\d.]+)px\s+(-?[\d.]+)px\s+(-?[\d.]+)px/);
+    const colorMatch = str.match(/rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}/);
+    return {
+      x: offsets ? Math.round(parseFloat(offsets[1])) : 0,
+      y: offsets ? Math.round(parseFloat(offsets[2])) : 0,
+      blur: offsets ? Math.round(parseFloat(offsets[3])) : 0,
+      color: colorMatch ? colorMatch[0] : 'rgba(0,0,0,0.25)'
+    };
+  }
+  const transformVal = parseTransform(el.style.transform);
+  const shadowVal = parseShadow(el.style.boxShadow);
+  const textShadowVal = parseShadow(el.style.textShadow);
   function esc(v){ return (v || '').replace(/"/g, '&quot;'); }
   function escText(v){ return (v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   const NO_TEXT_EDIT_TAGS = ['IMG', 'INPUT', 'TEXTAREA', 'SELECT', 'TABLE', 'UL', 'OL', 'IFRAME', 'VIDEO', 'AUDIO', 'HR', 'BR', 'PROGRESS', 'METER', 'FORM'];
@@ -204,6 +231,7 @@ function renderProps(){
     (isCheckableLabel && selCount <= 1 ?
       '<div class="field"><label>Texto da opção</label><input type="text" id="pCheckboxLabelText" value="' + esc(checkboxLabelText(el)) + '"></div>'
       : '') +
+    '<div class="propsSection">Identificação</div>' +
     '<div class="field"><label>Classe (CSS)</label><select id="pClassName">' + classSelectOptions + '</select></div>' +
     '<div class="field"><label>ID (pra JavaScript)</label><input type="text" id="pElId" placeholder="ex: titulo-principal" value="' + esc(el.id) + '">' +
       '<div class="fieldHint">Um id de verdade no HTML. No seu código da aba <code>{ } JS</code>, pegue o elemento com <code>document.getElementById(\'' + (el.id || 'seu-id') + '\')</code>.</div>' +
@@ -218,6 +246,15 @@ function renderProps(){
       '<div class="field"><label>Display</label><select id="pDisplay">' + opts(['block', 'inline-block', 'inline', 'flex', 'inline-flex', 'grid', 'none'], displayVal) + '</select></div>' +
       '<div class="field"><label>Posição</label><select id="pPosition">' + opts(['absolute', 'relative', 'static', 'fixed'], positionVal) + '</select></div>' +
     '</div>' +
+    '<div class="row2">' +
+      '<div class="field"><label>Float</label><select id="pFloat">' + opts(['none', 'left', 'right'], el.style.float || cs.float) + '</select></div>' +
+      '<div class="field"><label>Clear</label><select id="pClear">' + opts(['none', 'left', 'right', 'both'], el.style.clear || cs.clear) + '</select></div>' +
+    '</div>' +
+    '<div class="row2">' +
+      '<div class="field"><label>Overflow</label><select id="pOverflow">' + opts(['visible', 'hidden', 'scroll', 'auto'], el.style.overflow || cs.overflow) + '</select></div>' +
+      '<div class="field"><label>Visibilidade</label><select id="pVisibility">' + opts(['visible', 'hidden'], el.style.visibility || cs.visibility) + '</select></div>' +
+    '</div>' +
+    '<div class="field"><label>Alinhamento vertical</label><select id="pVerticalAlign">' + opts(['baseline', 'top', 'middle', 'bottom', 'text-top', 'text-bottom'], el.style.verticalAlign || cs.verticalAlign) + '</select></div>' +
     (isFlex ?
       '<div class="field"><label>Direção</label>' + flexIconGroupHTML('pFlexDir', ['row', 'column', 'row-reverse', 'column-reverse'], cs.flexDirection, dirIconIcon) + '</div>' +
       '<div class="field"><label>Alinhar (align-items)</label>' + flexIconGroupHTML('pAlign', ['stretch', 'flex-start', 'center', 'flex-end'], cs.alignItems, alignIconIcon) + '</div>' +
@@ -225,6 +262,17 @@ function renderProps(){
       '<div class="row2">' +
         '<div class="field"><label>Quebra</label><select id="pFlexWrap">' + opts(['nowrap', 'wrap', 'wrap-reverse'], cs.flexWrap) + '</select></div>' +
         '<div class="field">' + iconFieldHTML('Gap', 'pGap', parseFloat(cs.gap) || 0, 'Gap entre itens (px)') + '</div>' +
+      '</div>'
+      : '') +
+
+    (isGrid ?
+      '<div class="row2">' +
+        '<div class="field"><label>Colunas</label><input type="text" id="pGridCols" placeholder="ex: 1fr 1fr 1fr" value="' + esc(el.style.gridTemplateColumns) + '"></div>' +
+        '<div class="field"><label>Linhas</label><input type="text" id="pGridRows" placeholder="ex: auto auto" value="' + esc(el.style.gridTemplateRows) + '"></div>' +
+      '</div>' +
+      '<div class="row2">' +
+        '<div class="field"><label>Alinhar (align-items)</label><select id="pGridAlign">' + opts(['stretch', 'start', 'center', 'end'], cs.alignItems) + '</select></div>' +
+        '<div class="field">' + iconFieldHTML('Gap', 'pGridGap', parseFloat(cs.gap) || 0, 'Gap entre células (px)') + '</div>' +
       '</div>'
       : '') +
 
@@ -241,6 +289,14 @@ function renderProps(){
       '<div class="field"><div class="fieldRow">' + iconFieldHTML('W', 'pW', '', 'Largura') + '<select id="pWUnit" title="Unidade — % é relativo ao elemento pai"><option value="px">px</option><option value="%">%</option></select></div></div>' +
       '<div class="field"><div class="fieldRow">' + iconFieldHTML('H', 'pH', '', 'Altura') + '<select id="pHUnit" title="Unidade — % é relativo ao elemento pai"><option value="px">px</option><option value="%">%</option></select></div></div>' +
     '</div>' +
+    '<div class="field"><label>Box-sizing</label><select id="pBoxSizing">' + opts(['content-box', 'border-box'], el.style.boxSizing || cs.boxSizing) + '</select></div>' +
+    '<div class="row4">' +
+      '<div class="field">' + iconFieldHTML('miW', 'pMinW', pxOrEmpty(el.style.minWidth), 'Largura mínima (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('maW', 'pMaxW', pxOrEmpty(el.style.maxWidth), 'Largura máxima (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('miH', 'pMinH', pxOrEmpty(el.style.minHeight), 'Altura mínima (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('maH', 'pMaxH', pxOrEmpty(el.style.maxHeight), 'Altura máxima (px)') + '</div>' +
+    '</div>' +
+    '<div class="field"><label>Proporção (aspect-ratio)</label><input type="text" id="pAspectRatio" placeholder="ex: 16 / 9, ou deixe vazio" value="' + esc(el.style.aspectRatio) + '"></div>' +
 
     '<div class="propsSection">Cor</div>' +
     '<div class="row2">' +
@@ -260,11 +316,51 @@ function renderProps(){
       '<div class="field">' + iconFieldHTML('Aa', 'pFont', parseFloat(cs.fontSize) || 14, 'Tamanho da fonte (px)') + '</div>' +
       '<div class="field"><label>Opacidade (' + Math.round((parseFloat(cs.opacity) || 1) * 100) + '%)</label><input type="range" id="pOpacity" min="0" max="100" value="' + Math.round((parseFloat(cs.opacity) || 1) * 100) + '"></div>' +
     '</div>' +
-    '<div class="row2">' +
+    '<div class="row3">' +
       '<div class="field">' + iconFieldHTML('Blur', 'pBlur', parseFloat(((el.style.filter || cs.filter || '').match(/blur\(([\d.]+)px\)/) || [])[1]) || 0, 'Desfoque (blur, px)', ' min="0"') + '</div>' +
+      '<div class="field">' + iconFieldHTML('Vidro', 'pBackdropBlur', parseFloat(((el.style.backdropFilter || cs.backdropFilter || '').match(/blur\(([\d.]+)px\)/) || [])[1]) || 0, 'Desfoque de fundo — efeito vidro fosco (px)', ' min="0"') + '</div>' +
       '<div class="field"><label>Padrão de fundo</label><select id="pBgPattern">' + opts(['none', 'dots', 'grid'], currentBgPattern(el)) + '</select></div>' +
     '</div>' +
     '<div class="field"><label>Cor do padrão</label>' + colorSwatchHTML('pBgPatternColor', rgbToHex(cs.borderTopColor)) + '</div>' +
+    '<div class="field"><label>Imagem de fundo (foto)</label><div class="fieldRow" style="display:flex; gap:4px;">' +
+      '<input type="text" id="pBgImageUrl" placeholder="Cole uma URL, ou envie um arquivo" value="' + esc(currentBgImageUrl(el)) + '" style="flex:1;">' +
+      '<button type="button" class="miniBtn" id="pBgImageUpload">Upload</button>' +
+    '</div></div>' +
+    '<div class="field"><label>Ajuste da imagem</label><select id="pBgImageFit">' + opts(['cover', 'contain', 'auto'], el.style.backgroundSize && el.style.backgroundSize.indexOf('px') === -1 ? el.style.backgroundSize : 'cover') + '</select></div>' +
+    '<div class="row2">' +
+      '<div class="field">' + iconFieldHTML('Rot', 'pRotate', transformVal.rotate, 'Rotação (graus)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('Esc', 'pScale', transformVal.scale, 'Escala (%)', ' min="0"') + '</div>' +
+    '</div>' +
+    '<div class="row2">' +
+      '<div class="field"><label>Alinhamento do texto</label><select id="pTextAlign">' + opts(['left', 'center', 'right', 'justify'], cs.textAlign) + '</select></div>' +
+      '<div class="field"><label>Transformação</label><select id="pTextTransform">' + opts(['none', 'uppercase', 'lowercase', 'capitalize'], cs.textTransform) + '</select></div>' +
+    '</div>' +
+    '<div class="field"><label class="checkField"><input type="checkbox" id="pTextTruncate"' + ((el.style.textOverflow || cs.textOverflow) === 'ellipsis' ? ' checked' : '') + '> Truncar com reticências (…) — exige largura definida</label></div>' +
+    '<div class="row2">' +
+      '<div class="field">' + iconFieldHTML('LH', 'pLineHeight', px(cs.lineHeight), 'Altura da linha (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('LS', 'pLetterSpacing', px(cs.letterSpacing), 'Espaçamento entre letras (px)') + '</div>' +
+    '</div>' +
+    '<div class="row3">' +
+      '<div class="field"><label>Decoração</label><select id="pTextDecoration">' + opts(['none', 'underline', 'line-through'], (cs.textDecorationLine || cs.textDecoration || '').split(' ')[0]) + '</select></div>' +
+      '<div class="field"><label>Cursor</label><select id="pCursor">' + opts(['default', 'pointer', 'text', 'move', 'not-allowed'], el.style.cursor || cs.cursor) + '</select></div>' +
+      '<div class="field"><label>Estilo</label><select id="pFontStyle">' + opts(['normal', 'italic'], el.style.fontStyle || cs.fontStyle) + '</select></div>' +
+    '</div>' +
+
+    '<div class="propsSection">Sombra do texto</div>' +
+    '<div class="row3">' +
+      '<div class="field">' + iconFieldHTML('X', 'pTextShadowX', textShadowVal.x, 'Deslocamento horizontal (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('Y', 'pTextShadowY', textShadowVal.y, 'Deslocamento vertical (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('Blur', 'pTextShadowBlur', textShadowVal.blur, 'Desfoque (px)', ' min="0"') + '</div>' +
+    '</div>' +
+    '<div class="field"><label>Cor da sombra</label>' + colorSwatchHTML('pTextShadowColor', textShadowVal.color) + '</div>' +
+
+    '<div class="propsSection">Sombra</div>' +
+    '<div class="row3">' +
+      '<div class="field">' + iconFieldHTML('X', 'pShadowX', shadowVal.x, 'Deslocamento horizontal (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('Y', 'pShadowY', shadowVal.y, 'Deslocamento vertical (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('Blur', 'pShadowBlur', shadowVal.blur, 'Desfoque (px)', ' min="0"') + '</div>' +
+    '</div>' +
+    '<div class="field"><label>Cor da sombra</label>' + colorSwatchHTML('pShadowColor', shadowVal.color) + '</div>' +
 
     '<div class="propsSection" style="display:flex; align-items:center; gap:6px;">Cantos' +
       '<button type="button" id="pRadiusLock" class="miniBtn active" title="Vincular os 4 cantos" style="margin-left:auto; padding:1px 6px; font-size:11px;">🔗</button>' +
@@ -296,11 +392,16 @@ function renderProps(){
       '<div class="field">' + iconFieldHTML('L', 'pMarL', px(cs.marginLeft), 'Esquerda') + '</div>' +
     '</div>' +
 
-    '<div class="propsSection">Borda</div>' +
-    '<div class="row2">' +
-      '<div class="field">' + iconFieldHTML('Esp', 'pBorderW', px(cs.borderTopWidth), 'Espessura da borda (px)') + '</div>' +
-      '<div class="field"><label>Estilo</label><select id="pBorderStyle">' + opts(['none', 'solid', 'dashed', 'dotted'], cs.borderTopStyle === 'none' ? 'none' : cs.borderTopStyle) + '</select></div>' +
+    '<div class="propsSection" style="display:flex; align-items:center; gap:6px;">Borda' +
+      '<button type="button" id="pBorderLock" class="miniBtn active" title="Vincular os 4 lados" style="margin-left:auto; padding:1px 6px; font-size:11px;">🔗</button>' +
     '</div>' +
+    '<div class="row4">' +
+      '<div class="field">' + iconFieldHTML('T', 'pBorderT', px(cs.borderTopWidth), 'Espessura no topo (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('R', 'pBorderR', px(cs.borderRightWidth), 'Espessura à direita (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('B', 'pBorderB', px(cs.borderBottomWidth), 'Espessura embaixo (px)') + '</div>' +
+      '<div class="field">' + iconFieldHTML('L', 'pBorderL', px(cs.borderLeftWidth), 'Espessura à esquerda (px)') + '</div>' +
+    '</div>' +
+    '<div class="field"><label>Estilo</label><select id="pBorderStyle">' + opts(['none', 'solid', 'dashed', 'dotted'], cs.borderTopStyle === 'none' ? 'none' : cs.borderTopStyle) + '</select></div>' +
     '<div class="field"><label>Cor da borda</label><div class="fieldRow" style="display:flex; gap:4px;">' + colorSwatchHTML('pBorderColor', cs.borderTopColor) + varDropdownHTML(doc, el.style.borderColor, 'pBorderColorVar') + '</div></div>' +
 
     '<hr>' +
@@ -404,6 +505,43 @@ function renderProps(){
   pBgPattern.addEventListener('change', function(){ applyPattern(); });
   bindColorSwatchSimple('pBgPatternColor', function(rgba){ applyPattern(rgba); });
 
+  const pBgImageUrlInput = document.getElementById('pBgImageUrl');
+  const pBgImageFitSel = document.getElementById('pBgImageFit');
+  function applyBgImage(){
+    const url = pBgImageUrlInput.value.trim();
+    effectiveSelection().forEach(function(t){
+      if(url){
+        t.style.backgroundImage = 'url("' + url.replace(/"/g, '&quot;') + '")';
+        t.style.backgroundSize = pBgImageFitSel.value;
+        t.style.backgroundPosition = 'center';
+        t.style.backgroundRepeat = 'no-repeat';
+      } else {
+        t.style.backgroundImage = ''; t.style.backgroundSize = ''; t.style.backgroundPosition = ''; t.style.backgroundRepeat = '';
+      }
+    });
+    updateOverlayLive();
+    clearTimeout(codeDebounce);
+    codeDebounce = setTimeout(function(){ pushHistory(); syncCodeFromCanvas(); }, 400);
+  }
+  pBgImageUrlInput.addEventListener('input', applyBgImage);
+  pBgImageFitSel.addEventListener('change', applyBgImage);
+  const pBgImageUploadBtn = document.getElementById('pBgImageUpload');
+  const pBgImageFileInput = document.getElementById('pBgImageFileInput');
+  pBgImageUploadBtn.addEventListener('click', function(){ pBgImageFileInput.click(); });
+  // assignment (not addEventListener) since this static input outlives
+  // every re-render — reassigning avoids stacking a new listener each time.
+  pBgImageFileInput.onchange = function(){
+    const file = pBgImageFileInput.files[0];
+    pBgImageFileInput.value = '';
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = function(){
+      pBgImageUrlInput.value = reader.result;
+      applyBgImage();
+    };
+    reader.readAsDataURL(file);
+  };
+
   const pDisplay = document.getElementById('pDisplay');
   pDisplay.addEventListener('change', function(){
     effectiveSelection().forEach(function(t){ t.style.display = pDisplay.value; });
@@ -429,7 +567,18 @@ function renderProps(){
     bindProp('pFlexWrap', function(v, el){ el.style.flexWrap = v; }, 'change');
     bindProp('pGap', function(v, el){ el.style.gap = v + 'px'; });
   }
+  if(isGrid){
+    bindProp('pGridCols', function(v, el){ el.style.gridTemplateColumns = v; }, 'change');
+    bindProp('pGridRows', function(v, el){ el.style.gridTemplateRows = v; }, 'change');
+    bindProp('pGridAlign', function(v, el){ el.style.alignItems = v; }, 'change');
+    bindProp('pGridGap', function(v, el){ el.style.gap = v + 'px'; });
+  }
   if(free){ bindProp('pZ', function(v, el){ el.style.zIndex = v; }); }
+  bindProp('pFloat', function(v, el){ el.style.float = v; }, 'change');
+  bindProp('pClear', function(v, el){ el.style.clear = v; }, 'change');
+  bindProp('pOverflow', function(v, el){ el.style.overflow = v; }, 'change');
+  bindProp('pVisibility', function(v, el){ el.style.visibility = v; }, 'change');
+  bindProp('pVerticalAlign', function(v, el){ el.style.verticalAlign = v; }, 'change');
 
   bindPropPrimaryOnly('pX', function(v){ el.style.left = v + 'px'; });
   bindPropPrimaryOnly('pY', function(v){ el.style.top = v + 'px'; });
@@ -449,12 +598,92 @@ function renderProps(){
   bindLinkedBox('pRadiusLock', ['pRadiusTL', 'pRadiusTR', 'pRadiusBR', 'pRadiusBL'], ['borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomRightRadius', 'borderBottomLeftRadius']);
   bindProp('pOpacity', function(v, el){ el.style.opacity = (v / 100); });
   bindProp('pBlur', function(v, el){ el.style.filter = parseFloat(v) > 0 ? 'blur(' + v + 'px)' : ''; });
+  bindProp('pBackdropBlur', function(v, el){ el.style.backdropFilter = parseFloat(v) > 0 ? 'blur(' + v + 'px)' : ''; });
+  bindProp('pTextAlign', function(v, el){ el.style.textAlign = v; }, 'change');
+  bindProp('pTextTransform', function(v, el){ el.style.textTransform = v; }, 'change');
+  const pTextTruncate = document.getElementById('pTextTruncate');
+  if(pTextTruncate){
+    pTextTruncate.addEventListener('change', function(){
+      const on = pTextTruncate.checked;
+      effectiveSelection().forEach(function(t){
+        t.style.whiteSpace = on ? 'nowrap' : '';
+        t.style.overflow = on ? 'hidden' : '';
+        t.style.textOverflow = on ? 'ellipsis' : '';
+      });
+      updateOverlayLive();
+      pushHistory(); syncCodeFromCanvas(); renderProps();
+    });
+  }
+  bindProp('pLineHeight', function(v, el){ el.style.lineHeight = v ? v + 'px' : ''; });
+  bindProp('pLetterSpacing', function(v, el){ el.style.letterSpacing = v ? v + 'px' : ''; });
+  bindProp('pTextDecoration', function(v, el){ el.style.textDecoration = v; }, 'change');
+  bindProp('pCursor', function(v, el){ el.style.cursor = v; }, 'change');
+  bindProp('pFontStyle', function(v, el){ el.style.fontStyle = v; }, 'change');
+  bindProp('pBoxSizing', function(v, el){ el.style.boxSizing = v; }, 'change');
+  bindProp('pMinW', function(v, el){ el.style.minWidth = v ? v + 'px' : ''; });
+  bindProp('pMaxW', function(v, el){ el.style.maxWidth = v ? v + 'px' : ''; });
+  bindProp('pMinH', function(v, el){ el.style.minHeight = v ? v + 'px' : ''; });
+  bindProp('pMaxH', function(v, el){ el.style.maxHeight = v ? v + 'px' : ''; });
+  bindProp('pAspectRatio', function(v, el){ el.style.aspectRatio = v; }, 'change');
+
+  // rotate/scale share one `transform` property, so every change rebuilds
+  // the whole string from both fields rather than patching just its own part.
+  function currentTransformValue(){
+    const rotate = parseFloat(document.getElementById('pRotate').value) || 0;
+    const scale = parseFloat(document.getElementById('pScale').value);
+    const scaleFactor = isNaN(scale) ? 1 : scale / 100;
+    const parts = [];
+    if(rotate) parts.push('rotate(' + rotate + 'deg)');
+    if(scaleFactor !== 1) parts.push('scale(' + scaleFactor + ')');
+    return parts.join(' ');
+  }
+  bindProp('pRotate', function(v, el){ el.style.transform = currentTransformValue(); });
+  bindProp('pScale', function(v, el){ el.style.transform = currentTransformValue(); });
+
+  // X/Y/blur/color all feed the same single `box-shadow` value.
+  function currentShadowValue(){
+    const x = parseFloat(document.getElementById('pShadowX').value) || 0;
+    const y = parseFloat(document.getElementById('pShadowY').value) || 0;
+    const blur = parseFloat(document.getElementById('pShadowBlur').value) || 0;
+    const colorBtn = document.getElementById('pShadowColor');
+    const color = colorBtn ? colorBtn.dataset.color : 'rgba(0,0,0,0.25)';
+    return (x === 0 && y === 0 && blur === 0) ? 'none' : x + 'px ' + y + 'px ' + blur + 'px ' + color;
+  }
+  bindProp('pShadowX', function(v, el){ el.style.boxShadow = currentShadowValue(); });
+  bindProp('pShadowY', function(v, el){ el.style.boxShadow = currentShadowValue(); });
+  bindProp('pShadowBlur', function(v, el){ el.style.boxShadow = currentShadowValue(); });
+  bindColorSwatch('pShadowColor', function(v, el){ el.style.boxShadow = currentShadowValue(); });
+
+  function currentTextShadowValue(){
+    const x = parseFloat(document.getElementById('pTextShadowX').value) || 0;
+    const y = parseFloat(document.getElementById('pTextShadowY').value) || 0;
+    const blur = parseFloat(document.getElementById('pTextShadowBlur').value) || 0;
+    const colorBtn = document.getElementById('pTextShadowColor');
+    const color = colorBtn ? colorBtn.dataset.color : 'rgba(0,0,0,0.25)';
+    return (x === 0 && y === 0 && blur === 0) ? 'none' : x + 'px ' + y + 'px ' + blur + 'px ' + color;
+  }
+  bindProp('pTextShadowX', function(v, el){ el.style.textShadow = currentTextShadowValue(); });
+  bindProp('pTextShadowY', function(v, el){ el.style.textShadow = currentTextShadowValue(); });
+  bindProp('pTextShadowBlur', function(v, el){ el.style.textShadow = currentTextShadowValue(); });
+  bindColorSwatch('pTextShadowColor', function(v, el){ el.style.textShadow = currentTextShadowValue(); });
 
   bindLinkedBox('pPadLock', ['pPadT', 'pPadR', 'pPadB', 'pPadL'], ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft']);
   bindLinkedBox('pMarLock', ['pMarT', 'pMarR', 'pMarB', 'pMarL'], ['marginTop', 'marginRight', 'marginBottom', 'marginLeft']);
 
-  bindProp('pBorderW', function(v, el){ el.style.borderWidth = v + 'px'; if(parseFloat(v) > 0 && (!el.style.borderStyle || el.style.borderStyle === 'none')) el.style.borderStyle = 'solid'; });
-  bindProp('pBorderStyle', function(v, el){ el.style.borderStyle = v; if(v !== 'none' && (!el.style.borderWidth || parseFloat(el.style.borderWidth) === 0)) el.style.borderWidth = '1px'; }, 'change');
+  bindLinkedBox('pBorderLock', ['pBorderT', 'pBorderR', 'pBorderB', 'pBorderL'], ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth']);
+  // a side getting its first width needs a style or it stays invisible —
+  // same auto-solid nicety the old single "Esp" field had, just re-applied
+  // per side now that each one can be set independently.
+  ['pBorderT', 'pBorderR', 'pBorderB', 'pBorderL'].forEach(function(id){
+    const input = document.getElementById(id);
+    if(!input) return;
+    input.addEventListener('input', function(){
+      effectiveSelection().forEach(function(t){
+        if(parseFloat(input.value) > 0 && (!t.style.borderStyle || t.style.borderStyle === 'none')) t.style.borderStyle = 'solid';
+      });
+    });
+  });
+  bindProp('pBorderStyle', function(v, el){ el.style.borderStyle = v; if(v !== 'none' && !['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth'].some(function(p){ return parseFloat(el.style[p]) > 0; })) el.style.borderWidth = '1px'; }, 'change');
   bindColorSwatch('pBorderColor', function(v, el){ el.style.borderColor = v; });
   const pBgVar = document.getElementById('pBgVar');
   if(pBgVar){
@@ -547,7 +776,8 @@ function bindPropPrimaryOnly(id, fn, evt){
 function bindLinkedBox(lockId, sideIds, styleProps){
   const lockBtn = document.getElementById(lockId);
   if(!lockBtn) return;
-  lockBtn.addEventListener('click', function(){
+  lockBtn.addEventListener('click', function(e){
+    e.stopPropagation(); // lives inside the collapsible .propsSection header — without this the click also toggles the section collapsed
     lockBtn.classList.toggle('active');
   });
   sideIds.forEach(function(id, i){

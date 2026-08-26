@@ -14,6 +14,12 @@
 .checkField input[type="checkbox"]{width:auto; margin:0;}
 #pWUnit, #pHUnit{width:52px; flex:none; padding:6px 4px;}
 .miniBtn{flex-shrink:0; padding:4px 8px; font-size:11px;}
+/* the generic button:hover in base.css paints the same accent fill as
+   button.active — indistinguishable for a toggle like this one, where
+   active carries real meaning (linked/unlinked). Hover here only nudges
+   the border, same convention as .flexIconBtn. */
+.miniBtn:hover{background:var(--bg3); border-color:var(--accent); color:var(--text);}
+.miniBtn.active:hover{background:var(--accent2); border-color:var(--accent2); color:var(--on-accent);}
 
 /* flex control icon buttons — each one is a tiny live swatch laid out
    with the actual CSS value it sets, not a hand-drawn icon. */

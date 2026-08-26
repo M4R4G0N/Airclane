@@ -50,6 +50,10 @@ function attributesSectionHTML(el, opts){
   if(tag === 'IMG'){
     return '<div class="propsSection">Imagem</div>' +
       '<div class="field"><label>Texto alternativo (alt)</label><input type="text" id="pAttrAlt" value="' + esc(el.getAttribute('alt')) + '"></div>' +
+      '<div class="row2">' +
+        '<div class="field"><label>Ajuste (object-fit)</label><select id="pObjectFit">' + opts(['fill', 'contain', 'cover', 'none', 'scale-down'], el.style.objectFit || 'fill') + '</select></div>' +
+        '<div class="field"><label>Posição</label><select id="pObjectPosition">' + opts(['center', 'top', 'bottom', 'left', 'right'], el.style.objectPosition || 'center') + '</select></div>' +
+      '</div>' +
       actionSectionHTML(el);
   }
   if(tag === 'BUTTON'){
@@ -95,7 +99,9 @@ function attributesSectionHTML(el, opts){
       actionSectionHTML(el);
   }
   if(TEXT_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pTextType', 'Texto', tag, TEXT_TYPES) + actionSectionHTML(el);
-  if(LIST_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pListType', 'Lista', tag, LIST_TYPES) + actionSectionHTML(el);
+  if(LIST_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pListType', 'Lista', tag, LIST_TYPES) +
+    '<div class="field"><label>Marcador</label><select id="pListStyle">' + opts(['disc', 'circle', 'square', 'decimal', 'lower-alpha', 'upper-roman', 'none'], el.style.listStyleType || 'disc') + '</select></div>' +
+    actionSectionHTML(el);
   if(MEDIA_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pMediaType', 'Mídia', tag, MEDIA_TYPES) + actionSectionHTML(el);
   if(INDICATOR_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pIndicatorType', 'Indicador', tag, INDICATOR_TYPES) + actionSectionHTML(el);
   if(CONTAINER_TYPE_TAGS.indexOf(tag) !== -1) return typeSwitchHTML('pContainerType', 'Container', tag, CONTAINER_TYPES) + actionSectionHTML(el);
@@ -140,6 +146,18 @@ function bindAttributesSection(el){
   bindAttr('pAttrTarget', 'target', 'change');
   bindAttr('pAttrAlt', 'alt');
   bindAttr('pAttrAction', 'action');
+  const listStyleSel = document.getElementById('pListStyle');
+  if(listStyleSel){
+    listStyleSel.addEventListener('change', function(){ el.style.listStyleType = listStyleSel.value; pushHistory(); syncCodeFromCanvas(); });
+  }
+  const objectFitSel = document.getElementById('pObjectFit');
+  if(objectFitSel){
+    objectFitSel.addEventListener('change', function(){ el.style.objectFit = objectFitSel.value; pushHistory(); syncCodeFromCanvas(); });
+  }
+  const objectPositionSel = document.getElementById('pObjectPosition');
+  if(objectPositionSel){
+    objectPositionSel.addEventListener('change', function(){ el.style.objectPosition = objectPositionSel.value; pushHistory(); syncCodeFromCanvas(); });
+  }
 
   const linkMode = document.getElementById('pAttrLinkMode');
   if(linkMode){
@@ -255,5 +273,14 @@ function currentBgPattern(el){
   if(img.indexOf('radial-gradient') === 0) return 'dots';
   if(img.indexOf('linear-gradient') === 0) return 'grid';
   return 'none';
+}
+
+// a photo background shares the same `background-image` property as the
+// dots/grid pattern above and the Fundo swatch's gradient fill — whichever
+// one is applied last simply overwrites the others, same as switching
+// between dots and grid already does.
+function currentBgImageUrl(el){
+  const m = (el.style.backgroundImage || '').match(/^url\((['"]?)(.*?)\1\)$/);
+  return m ? m[2] : '';
 }
 
